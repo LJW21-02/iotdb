@@ -133,11 +133,11 @@ public abstract class SubscriptionPrefetchingQueue {
     batches.cleanUp();
 
     // clean up events in prefetchingQueue
-    prefetchingQueue.forEach(SubscriptionEvent::cleanUp);
+    prefetchingQueue.forEach(event -> event.cleanUp(true));
     prefetchingQueue.clear();
 
     // clean up events in inFlightEvents
-    inFlightEvents.values().forEach(SubscriptionEvent::cleanUp);
+    inFlightEvents.values().forEach(event -> event.cleanUp(true));
     inFlightEvents.clear();
 
     // no need to clean up events in inputPendingQueue, see
@@ -435,7 +435,7 @@ public abstract class SubscriptionPrefetchingQueue {
                 commitContext,
                 this);
             // clean up committed event
-            ev.cleanUp();
+            ev.cleanUp(false);
             return null; // remove this entry
           }
 
@@ -465,7 +465,7 @@ public abstract class SubscriptionPrefetchingQueue {
           acked.set(true);
 
           // clean up committed event
-          ev.cleanUp();
+          ev.cleanUp(false);
           return null; // remove this entry
         });
 
@@ -656,7 +656,7 @@ public abstract class SubscriptionPrefetchingQueue {
   private final RemappingFunction<SubscriptionEvent> committedCleaner =
       (ev) -> {
         if (ev.isCommitted()) {
-          ev.cleanUp();
+          ev.cleanUp(false);
           return null; // remove this entry
         }
         return ev;
