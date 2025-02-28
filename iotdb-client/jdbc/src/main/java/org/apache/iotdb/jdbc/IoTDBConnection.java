@@ -340,18 +340,8 @@ public class IoTDBConnection implements Connection {
         logger.error("Use database error: {}", e.getMessage());
         throw e;
       }
+
       return;
-    }
-      Statement stmt = this.createStatement();
-      String sql = "USE " + arg0;
-      boolean rs;
-      try {
-        rs = stmt.execute(sql);
-      } catch (SQLException e) {
-        stmt.close();
-        logger.error("Use database error: {}", e.getMessage());
-        throw e;
-      }
     }
     throw new SQLException("Does not support setSchema");
   }
