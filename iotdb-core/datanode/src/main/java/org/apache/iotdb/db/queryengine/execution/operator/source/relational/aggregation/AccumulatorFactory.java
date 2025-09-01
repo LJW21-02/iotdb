@@ -20,12 +20,20 @@
 package org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation;
 
 import org.apache.iotdb.common.rpc.thrift.TAggregationType;
-import org.apache.iotdb.commons.udf.utils.TableUDFUtils;
 import org.apache.iotdb.commons.udf.utils.UDFDataTypeTransformer;
 import org.apache.iotdb.db.queryengine.execution.aggregation.VarianceAccumulator;
+import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.BinaryGroupedApproxMostFrequentAccumulator;
+import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.BlobGroupedApproxMostFrequentAccumulator;
+import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.BooleanGroupedApproxMostFrequentAccumulator;
+import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.DoubleGroupedApproxMostFrequentAccumulator;
+import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.FloatGroupedApproxMostFrequentAccumulator;
 import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.GroupedAccumulator;
+import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.GroupedApproxCountDistinctAccumulator;
+import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.GroupedApproxPercentileAccumulator;
+import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.GroupedApproxPercentileWithWeightAccumulator;
 import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.GroupedAvgAccumulator;
 import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.GroupedCountAccumulator;
+import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.GroupedCountAllAccumulator;
 import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.GroupedCountIfAccumulator;
 import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.GroupedExtremeAccumulator;
 import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.GroupedFirstAccumulator;
@@ -40,10 +48,13 @@ import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggr
 import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.GroupedSumAccumulator;
 import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.GroupedUserDefinedAggregateAccumulator;
 import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.GroupedVarianceAccumulator;
+import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.IntGroupedApproxMostFrequentAccumulator;
+import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.LongGroupedApproxMostFrequentAccumulator;
 import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.UpdateMemory;
 import org.apache.iotdb.db.queryengine.execution.operator.source.relational.aggregation.grouped.hash.MarkDistinctHash;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.Expression;
 import org.apache.iotdb.db.queryengine.plan.relational.type.InternalTypeManager;
+import org.apache.iotdb.db.queryengine.plan.udf.TableUDFUtils;
 import org.apache.iotdb.udf.api.customizer.parameter.FunctionArguments;
 import org.apache.iotdb.udf.api.relational.AggregateFunction;
 
@@ -55,11 +66,13 @@ import org.apache.tsfile.file.metadata.statistics.Statistics;
 import org.apache.tsfile.read.common.block.column.IntColumn;
 import org.apache.tsfile.read.common.type.Type;
 import org.apache.tsfile.read.common.type.TypeFactory;
+import org.apache.tsfile.write.UnSupportedDataTypeException;
 
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -68,6 +81,7 @@ import static java.util.Objects.requireNonNull;
 import static org.apache.iotdb.commons.udf.builtin.relational.TableBuiltinAggregationFunction.FIRST_BY;
 import static org.apache.iotdb.commons.udf.builtin.relational.TableBuiltinAggregationFunction.LAST;
 import static org.apache.iotdb.commons.udf.builtin.relational.TableBuiltinAggregationFunction.LAST_BY;
+import static org.apache.iotdb.db.queryengine.plan.relational.planner.ir.GlobalTimePredicateExtractVisitor.isMeasurementColumn;
 import static org.apache.iotdb.db.queryengine.plan.relational.planner.ir.GlobalTimePredicateExtractVisitor.isTimeColumn;
 import static org.apache.tsfile.read.common.type.IntType.INT32;
 
@@ -81,6 +95,7 @@ public class AccumulatorFactory {
       Map<String, String> inputAttributes,
       boolean ascending,
       String timeColumnName,
+      Set<String> measurementColumnNames,
       boolean distinct) {
     TableAccumulator result;
 
@@ -90,20 +105,20 @@ public class AccumulatorFactory {
     } else if ((LAST_BY.getFunctionName().equals(functionName)
             || FIRST_BY.getFunctionName().equals(functionName))
         && inputExpressions.size() > 1) {
-      boolean xIsTimeColumn = false;
-      boolean yIsTimeColumn = false;
-      if (isTimeColumn(inputExpressions.get(1), timeColumnName)) {
-        yIsTimeColumn = true;
-      } else if (isTimeColumn(inputExpressions.get(0), timeColumnName)) {
-        xIsTimeColumn = true;
-      }
+      boolean xIsTimeColumn = isTimeColumn(inputExpressions.get(0), timeColumnName);
+      boolean yIsTimeColumn = isTimeColumn(inputExpressions.get(1), timeColumnName);
       if (LAST_BY.getFunctionName().equals(functionName)) {
         result =
             ascending
                 ? new LastByAccumulator(
                     inputDataTypes.get(0), inputDataTypes.get(1), xIsTimeColumn, yIsTimeColumn)
                 : new LastByDescAccumulator(
-                    inputDataTypes.get(0), inputDataTypes.get(1), xIsTimeColumn, yIsTimeColumn);
+                    inputDataTypes.get(0),
+                    inputDataTypes.get(1),
+                    xIsTimeColumn,
+                    yIsTimeColumn,
+                    isMeasurementColumn(inputExpressions.get(0), measurementColumnNames),
+                    isMeasurementColumn(inputExpressions.get(1), measurementColumnNames));
       } else {
         result =
             ascending
@@ -113,10 +128,12 @@ public class AccumulatorFactory {
                     inputDataTypes.get(0), inputDataTypes.get(1), xIsTimeColumn, yIsTimeColumn);
       }
     } else if (LAST.getFunctionName().equals(functionName)) {
-      boolean isTimeColumn = isTimeColumn(inputExpressions.get(0), timeColumnName);
       return ascending
-          ? new LastAccumulator(inputDataTypes.get(0), isTimeColumn)
-          : new LastDescAccumulator(inputDataTypes.get(0), isTimeColumn);
+          ? new LastAccumulator(inputDataTypes.get(0))
+          : new LastDescAccumulator(
+              inputDataTypes.get(0),
+              isTimeColumn(inputExpressions.get(0), timeColumnName),
+              isMeasurementColumn(inputExpressions.get(0), measurementColumnNames));
     } else {
       result =
           createBuiltinAccumulator(
@@ -200,6 +217,8 @@ public class AccumulatorFactory {
     switch (aggregationType) {
       case COUNT:
         return new GroupedCountAccumulator();
+      case COUNT_ALL:
+        return new GroupedCountAllAccumulator();
       case COUNT_IF:
         return new GroupedCountIfAccumulator();
       case AVG:
@@ -240,6 +259,16 @@ public class AccumulatorFactory {
       case VAR_POP:
         return new GroupedVarianceAccumulator(
             inputDataTypes.get(0), VarianceAccumulator.VarianceType.VAR_POP);
+      case APPROX_COUNT_DISTINCT:
+        return new GroupedApproxCountDistinctAccumulator(inputDataTypes.get(0));
+      case APPROX_MOST_FREQUENT:
+        return getGroupedApproxMostFrequentAccumulator(inputDataTypes.get(0));
+      case APPROX_PERCENTILE:
+        if (inputDataTypes.size() == 2) {
+          return new GroupedApproxPercentileAccumulator(inputDataTypes.get(0));
+        } else {
+          return new GroupedApproxPercentileWithWeightAccumulator(inputDataTypes.get(0));
+        }
       default:
         throw new IllegalArgumentException("Invalid Aggregation function: " + aggregationType);
     }
@@ -264,8 +293,8 @@ public class AccumulatorFactory {
         return new SumAccumulator(inputDataTypes.get(0));
       case LAST:
         return ascending
-            ? new LastAccumulator(inputDataTypes.get(0), false)
-            : new LastDescAccumulator(inputDataTypes.get(0), false);
+            ? new LastAccumulator(inputDataTypes.get(0))
+            : new LastDescAccumulator(inputDataTypes.get(0), false, false);
       case FIRST:
         return ascending
             ? new FirstAccumulator(inputDataTypes.get(0))
@@ -277,7 +306,8 @@ public class AccumulatorFactory {
       case LAST_BY:
         return ascending
             ? new LastByAccumulator(inputDataTypes.get(0), inputDataTypes.get(1), false, false)
-            : new LastByDescAccumulator(inputDataTypes.get(0), inputDataTypes.get(1), false, false);
+            : new LastByDescAccumulator(
+                inputDataTypes.get(0), inputDataTypes.get(1), false, false, false, false);
       case FIRST_BY:
         return ascending
             ? new FirstByAccumulator(inputDataTypes.get(0), inputDataTypes.get(1), false, false)
@@ -305,8 +335,68 @@ public class AccumulatorFactory {
       case VAR_POP:
         return new TableVarianceAccumulator(
             inputDataTypes.get(0), VarianceAccumulator.VarianceType.VAR_POP);
+      case APPROX_COUNT_DISTINCT:
+        return new ApproxCountDistinctAccumulator(inputDataTypes.get(0));
+      case APPROX_MOST_FREQUENT:
+        return getApproxMostFrequentAccumulator(inputDataTypes.get(0));
+      case APPROX_PERCENTILE:
+        if (inputDataTypes.size() == 2) {
+          return new ApproxPercentileAccumulator(inputDataTypes.get(0));
+        } else {
+          return new ApproxPercentileWithWeightAccumulator(inputDataTypes.get(0));
+        }
       default:
         throw new IllegalArgumentException("Invalid Aggregation function: " + aggregationType);
+    }
+  }
+
+  public static GroupedAccumulator getGroupedApproxMostFrequentAccumulator(TSDataType type) {
+    switch (type) {
+      case BOOLEAN:
+        return new BooleanGroupedApproxMostFrequentAccumulator();
+      case INT32:
+      case DATE:
+        return new IntGroupedApproxMostFrequentAccumulator();
+      case INT64:
+      case TIMESTAMP:
+        return new LongGroupedApproxMostFrequentAccumulator();
+      case FLOAT:
+        return new FloatGroupedApproxMostFrequentAccumulator();
+      case DOUBLE:
+        return new DoubleGroupedApproxMostFrequentAccumulator();
+      case TEXT:
+      case STRING:
+        return new BinaryGroupedApproxMostFrequentAccumulator();
+      case BLOB:
+        return new BlobGroupedApproxMostFrequentAccumulator();
+      default:
+        throw new UnSupportedDataTypeException(
+            String.format("Unsupported data type in APPROX_COUNT_DISTINCT Aggregation: %s", type));
+    }
+  }
+
+  public static TableAccumulator getApproxMostFrequentAccumulator(TSDataType type) {
+    switch (type) {
+      case BOOLEAN:
+        return new BooleanApproxMostFrequentAccumulator();
+      case INT32:
+      case DATE:
+        return new IntApproxMostFrequentAccumulator();
+      case INT64:
+      case TIMESTAMP:
+        return new LongApproxMostFrequentAccumulator();
+      case FLOAT:
+        return new FloatApproxMostFrequentAccumulator();
+      case DOUBLE:
+        return new DoubleApproxMostFrequentAccumulator();
+      case TEXT:
+      case STRING:
+        return new BinaryApproxMostFrequentAccumulator();
+      case BLOB:
+        return new BlobApproxMostFrequentAccumulator();
+      default:
+        throw new UnSupportedDataTypeException(
+            String.format("Unsupported data type in APPROX_COUNT_DISTINCT Aggregation: %s", type));
     }
   }
 

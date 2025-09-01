@@ -69,6 +69,9 @@ public class LogDispatcher {
   private final AtomicLong logEntriesFromWAL = new AtomicLong(0);
   private final AtomicLong logEntriesFromQueue = new AtomicLong(0);
 
+  private static final AtomicLong senderMemSizeSum = new AtomicLong(0);
+  private static final AtomicLong receiverMemSizeSum = new AtomicLong(0);
+
   public LogDispatcher(
       IoTConsensusServerImpl impl,
       IClientManager<TEndPoint, AsyncIoTConsensusServiceClient> clientManager) {
@@ -98,15 +101,15 @@ public class LogDispatcher {
 
   public synchronized void start() {
     if (!threads.isEmpty()) {
-      threads.forEach(executorService::submit);
+      threads.forEach(logDispatcherThread -> executorService.submit(logDispatcherThread));
     }
   }
 
   public synchronized void stop() {
     if (!threads.isEmpty()) {
       threads.forEach(LogDispatcherThread::setStopped);
-      threads.forEach(LogDispatcherThread::processStopped);
       executorService.shutdownNow();
+      threads.forEach(LogDispatcherThread::processStopped);
       int timeout = 10;
       try {
         if (!executorService.awaitTermination(timeout, TimeUnit.SECONDS)) {
@@ -120,7 +123,8 @@ public class LogDispatcher {
     stopped = true;
   }
 
-  public synchronized void addLogDispatcherThread(Peer peer, long initialSyncIndex) {
+  public synchronized void addLogDispatcherThread(
+      Peer peer, long initialSyncIndex, boolean startNow) {
     if (stopped) {
       return;
     }
@@ -131,7 +135,9 @@ public class LogDispatcher {
     if (this.executorService == null) {
       initLogSyncThreadPool();
     }
-    executorService.submit(thread);
+    if (startNow) {
+      executorService.submit(thread);
+    }
   }
 
   public synchronized void removeLogDispatcherThread(Peer peer) throws IOException {
@@ -277,7 +283,7 @@ public class LogDispatcher {
 
     /** try to offer a request into queue with memory control. */
     public boolean offer(IndexedConsensusRequest indexedConsensusRequest) {
-      if (!iotConsensusMemoryManager.reserve(indexedConsensusRequest.getSerializedSize(), true)) {
+      if (!iotConsensusMemoryManager.reserve(indexedConsensusRequest)) {
         return false;
       }
       boolean success;
@@ -285,19 +291,19 @@ public class LogDispatcher {
         success = pendingEntries.offer(indexedConsensusRequest);
       } catch (Throwable t) {
         // If exception occurs during request offer, the reserved memory should be released
-        iotConsensusMemoryManager.free(indexedConsensusRequest.getSerializedSize(), true);
+        iotConsensusMemoryManager.free(indexedConsensusRequest);
         throw t;
       }
       if (!success) {
         // If offer failed, the reserved memory should be released
-        iotConsensusMemoryManager.free(indexedConsensusRequest.getSerializedSize(), true);
+        iotConsensusMemoryManager.free(indexedConsensusRequest);
       }
       return success;
     }
 
     /** try to remove a request from queue with memory control. */
     private void releaseReservedMemory(IndexedConsensusRequest indexedConsensusRequest) {
-      iotConsensusMemoryManager.free(indexedConsensusRequest.getSerializedSize(), true);
+      iotConsensusMemoryManager.free(indexedConsensusRequest);
     }
 
     public void stop() {
@@ -317,17 +323,13 @@ public class LogDispatcher {
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
       }
-      long requestSize = 0;
       for (IndexedConsensusRequest indexedConsensusRequest : pendingEntries) {
-        requestSize += indexedConsensusRequest.getSerializedSize();
+        iotConsensusMemoryManager.free(indexedConsensusRequest);
       }
       pendingEntries.clear();
-      iotConsensusMemoryManager.free(requestSize, true);
-      requestSize = 0;
       for (IndexedConsensusRequest indexedConsensusRequest : bufferedEntries) {
-        requestSize += indexedConsensusRequest.getSerializedSize();
+        iotConsensusMemoryManager.free(indexedConsensusRequest);
       }
-      iotConsensusMemoryManager.free(requestSize, true);
       syncStatus.free();
       MetricService.getInstance().removeMetricSet(logDispatcherThreadMetrics);
     }
@@ -564,7 +566,8 @@ public class LogDispatcher {
         data.buildSerializedRequests();
         // construct request from wal
         logBatches.addTLogEntry(
-            new TLogEntry(data.getSerializedRequests(), data.getSearchIndex(), true));
+            new TLogEntry(
+                data.getSerializedRequests(), data.getSearchIndex(), true, data.getMemorySize()));
       }
       // In the case of corrupt Data, we return true so that we can send a batch as soon as
       // possible, avoiding potential duplication
@@ -574,7 +577,19 @@ public class LogDispatcher {
     private void constructBatchIndexedFromConsensusRequest(
         IndexedConsensusRequest request, Batch logBatches) {
       logBatches.addTLogEntry(
-          new TLogEntry(request.getSerializedRequests(), request.getSearchIndex(), false));
+          new TLogEntry(
+              request.getSerializedRequests(),
+              request.getSearchIndex(),
+              false,
+              request.getMemorySize()));
     }
+  }
+
+  public static AtomicLong getReceiverMemSizeSum() {
+    return receiverMemSizeSum;
+  }
+
+  public static AtomicLong getSenderMemSizeSum() {
+    return senderMemSizeSum;
   }
 }

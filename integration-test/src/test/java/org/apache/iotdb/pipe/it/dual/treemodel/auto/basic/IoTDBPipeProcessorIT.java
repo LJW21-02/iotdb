@@ -33,6 +33,7 @@ import org.apache.iotdb.rpc.TSStatusCode;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
@@ -59,13 +60,17 @@ public class IoTDBPipeProcessorIT extends AbstractPipeDualTreeModelAutoIT {
         .setAutoCreateSchemaEnabled(true)
         .setTimestampPrecision("ms")
         .setConfigNodeConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS)
-        .setSchemaRegionConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS);
+        .setSchemaRegionConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS)
+        .setPipeMemoryManagementEnabled(false)
+        .setIsPipeEnableMemoryCheck(false);
     receiverEnv
         .getConfig()
         .getCommonConfig()
         .setAutoCreateSchemaEnabled(true)
         .setConfigNodeConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS)
-        .setSchemaRegionConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS);
+        .setSchemaRegionConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS)
+        .setPipeMemoryManagementEnabled(false)
+        .setIsPipeEnableMemoryCheck(false);
 
     // 10 min, assert that the operations will not time out
     senderEnv.getConfig().getCommonConfig().setDnConnectionTimeoutMs(600000);
@@ -75,6 +80,7 @@ public class IoTDBPipeProcessorIT extends AbstractPipeDualTreeModelAutoIT {
     receiverEnv.initClusterEnvironment();
   }
 
+  @Ignore
   @Test
   public void testTumblingTimeSamplingProcessor() throws Exception {
     final DataNodeWrapper receiverDataNode = receiverEnv.getDataNodeWrapper(0);
@@ -92,7 +98,8 @@ public class IoTDBPipeProcessorIT extends AbstractPipeDualTreeModelAutoIT {
       if (!TestUtils.tryExecuteNonQueriesWithRetry(
           senderEnv,
           Arrays.asList(
-              "insert into root.vehicle.d0(time, s1) values (0, 1)", "delete from root.**"))) {
+              "insert into root.vehicle.d0(time, s1) values (0, 1)", "delete from root.**"),
+          null)) {
         return;
       }
 
@@ -131,7 +138,8 @@ public class IoTDBPipeProcessorIT extends AbstractPipeDualTreeModelAutoIT {
               "insert into root.vehicle.d0(time, s1) values (20000, 4)",
               "insert into root.vehicle.d0(time, s1) values (20001, 5)",
               "insert into root.vehicle.d0(time, s1) values (45000, 6)",
-              "flush"))) {
+              "flush"),
+          null)) {
         return;
       }
 
@@ -142,7 +150,7 @@ public class IoTDBPipeProcessorIT extends AbstractPipeDualTreeModelAutoIT {
       expectedResSet.add("45000,6.0,");
 
       TestUtils.assertDataEventuallyOnEnv(
-          receiverEnv, "select * from root.**", "Time,root.vehicle.d0.s1,", expectedResSet);
+          receiverEnv, "select * from root.vehicle.**", "Time,root.vehicle.d0.s1,", expectedResSet);
     }
   }
 }

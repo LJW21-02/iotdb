@@ -25,7 +25,6 @@ import org.apache.iotdb.db.conf.IoTDBDescriptor;
 import org.apache.iotdb.db.protocol.session.SessionManager;
 import org.apache.iotdb.db.queryengine.common.MPPQueryContext;
 import org.apache.iotdb.db.queryengine.plan.Coordinator;
-import org.apache.iotdb.db.queryengine.plan.analyze.QueryType;
 import org.apache.iotdb.db.queryengine.plan.execution.ExecutionResult;
 import org.apache.iotdb.db.queryengine.plan.planner.LocalExecutionPlanner;
 import org.apache.iotdb.db.queryengine.plan.relational.metadata.ITableDeviceSchemaValidation;
@@ -47,7 +46,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
-import static org.apache.iotdb.db.queryengine.plan.relational.metadata.fetcher.TableDeviceSchemaFetcher.convertIdValuesToDeviceID;
+import static org.apache.iotdb.db.queryengine.plan.relational.metadata.fetcher.TableDeviceSchemaFetcher.convertTagValuesToDeviceID;
 
 public class TableDeviceSchemaValidator {
   private final SqlParser relationSqlParser = new SqlParser();
@@ -128,7 +127,7 @@ public class TableDeviceSchemaValidator {
           TableDeviceSchemaCache.getInstance()
               .getDeviceAttribute(
                   schemaValidation.getDatabase(),
-                  convertIdValuesToDeviceID(
+                  convertTagValuesToDeviceID(
                       schemaValidation.getTableName(), (String[]) deviceIdList.get(i)));
       if (attributeMap == null) {
         result.missingDeviceIndexList.add(i);
@@ -166,7 +165,7 @@ public class TableDeviceSchemaValidator {
     for (final int index : previousValidateResult.missingDeviceIndexList) {
       final Map<String, Binary> attributeMap =
           fetchedDeviceSchema.get(
-              convertIdValuesToDeviceID(
+              convertTagValuesToDeviceID(
                   schemaValidation.getTableName(), (String[]) deviceIdList.get(index)));
       if (attributeMap == null) {
         result.missingDeviceIndexList.add(index);
@@ -238,13 +237,14 @@ public class TableDeviceSchemaValidator {
             relationSqlParser,
             SessionManager.getInstance().getCurrSession(),
             SessionManager.getInstance().requestQueryId(),
-            SessionManager.getInstance()
-                .getSessionInfo(SessionManager.getInstance().getCurrSession()),
+            context == null
+                ? SessionManager.getInstance()
+                    .getSessionInfo(SessionManager.getInstance().getCurrSession())
+                : context.getSession(),
             "Create device or update device attribute for insert",
             LocalExecutionPlanner.getInstance().metadata,
-            context == null || context.getQueryType().equals(QueryType.WRITE)
-                ? config.getQueryTimeoutThreshold()
-                : context.getTimeOut(),
+            // Never timeout for write statement
+            Long.MAX_VALUE,
             false);
     if (executionResult.status.getCode() != TSStatusCode.SUCCESS_STATUS.getStatusCode()) {
       throw new RuntimeException(

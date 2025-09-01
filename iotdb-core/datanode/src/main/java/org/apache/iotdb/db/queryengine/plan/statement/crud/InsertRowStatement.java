@@ -29,6 +29,7 @@ import org.apache.iotdb.db.exception.metadata.DataTypeMismatchException;
 import org.apache.iotdb.db.exception.metadata.PathNotExistException;
 import org.apache.iotdb.db.exception.query.QueryProcessException;
 import org.apache.iotdb.db.exception.sql.SemanticException;
+import org.apache.iotdb.db.pipe.resource.memory.InsertNodeMemoryEstimator;
 import org.apache.iotdb.db.queryengine.common.MPPQueryContext;
 import org.apache.iotdb.db.queryengine.common.schematree.IMeasurementSchemaInfo;
 import org.apache.iotdb.db.queryengine.plan.analyze.schema.ISchemaValidation;
@@ -49,6 +50,7 @@ import org.apache.tsfile.file.metadata.enums.CompressionType;
 import org.apache.tsfile.file.metadata.enums.TSEncoding;
 import org.apache.tsfile.utils.Binary;
 import org.apache.tsfile.utils.Pair;
+import org.apache.tsfile.utils.RamUsageEstimator;
 import org.apache.tsfile.utils.ReadWriteIOUtils;
 import org.apache.tsfile.write.schema.MeasurementSchema;
 import org.slf4j.Logger;
@@ -67,6 +69,9 @@ import java.util.Objects;
 public class InsertRowStatement extends InsertBaseStatement implements ISchemaValidation {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(InsertRowStatement.class);
+
+  private static final long INSTANCE_SIZE =
+      RamUsageEstimator.shallowSizeOfInstance(InsertRowStatement.class);
 
   protected static final byte TYPE_RAW_STRING = -1;
   protected static final byte TYPE_NULL = -2;
@@ -488,10 +493,10 @@ public class InsertRowStatement extends InsertBaseStatement implements ISchemaVa
   @TableModel
   public IDeviceID getTableDeviceID() {
     if (deviceID == null) {
-      String[] deviceIdSegments = new String[getIdColumnIndices().size() + 1];
+      String[] deviceIdSegments = new String[getTagColumnIndices().size() + 1];
       deviceIdSegments[0] = this.getTableName();
-      for (int i = 0; i < getIdColumnIndices().size(); i++) {
-        final Integer columnIndex = getIdColumnIndices().get(i);
+      for (int i = 0; i < getTagColumnIndices().size(); i++) {
+        final Integer columnIndex = getTagColumnIndices().get(i);
         deviceIdSegments[i + 1] =
             values[columnIndex] != null ? values[columnIndex].toString() : null;
       }
@@ -527,5 +532,20 @@ public class InsertRowStatement extends InsertBaseStatement implements ISchemaVa
   public void swapColumn(int src, int target) {
     super.swapColumn(src, target);
     CommonUtils.swapArray(values, src, target);
+  }
+
+  @Override
+  protected long calculateBytesUsed() {
+    return INSTANCE_SIZE
+        + InsertNodeMemoryEstimator.sizeOfValues(values, measurementSchemas)
+        + RamUsageEstimator.sizeOf(measurementIsAligned)
+        + InsertNodeMemoryEstimator.sizeOfIDeviceID(deviceID);
+  }
+
+  @Override
+  protected void subRemoveAttributeColumns(List<Integer> columnsToKeep) {
+    if (values != null) {
+      values = columnsToKeep.stream().map(i -> values[i]).toArray();
+    }
   }
 }

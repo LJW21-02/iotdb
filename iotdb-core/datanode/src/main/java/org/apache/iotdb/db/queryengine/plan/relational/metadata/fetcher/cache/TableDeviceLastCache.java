@@ -134,13 +134,24 @@ public class TableDeviceLastCache {
 
   int tryUpdate(
       final @Nonnull String[] measurements, final @Nonnull TimeValuePair[] timeValuePairs) {
+    return tryUpdate(measurements, timeValuePairs, false);
+  }
+
+  int tryUpdate(
+      final @Nonnull String[] measurements,
+      final @Nonnull TimeValuePair[] timeValuePairs,
+      final boolean invalidateNull) {
     final AtomicInteger diff = new AtomicInteger(0);
     long lastTime = Long.MIN_VALUE;
 
     for (int i = 0; i < measurements.length; ++i) {
       if (Objects.isNull(timeValuePairs[i])) {
+        if (invalidateNull) {
+          measurement2CachedLastMap.remove(measurements[i]);
+        }
         continue;
       }
+
       final int finalI = i;
       if (lastTime < timeValuePairs[i].getTimestamp()) {
         lastTime = timeValuePairs[i].getTimestamp();
@@ -173,9 +184,8 @@ public class TableDeviceLastCache {
         measurement,
         (s, timeValuePair) -> {
           diff.set(
-              isTableModel
-                  ? 0
-                  : (int) RamUsageEstimator.sizeOf(s) + getTVPairEntrySize(timeValuePair));
+              (isTableModel ? 0 : (int) RamUsageEstimator.sizeOf(s))
+                  + getTVPairEntrySize(timeValuePair));
           time.set(timeValuePair.getTimestamp());
           return null;
         });

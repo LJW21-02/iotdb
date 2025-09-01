@@ -53,7 +53,6 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 public abstract class InsertNode extends SearchNode {
-
   private static final IoTDBConfig config = IoTDBDescriptor.getInstance().getConfig();
 
   /**
@@ -69,7 +68,7 @@ public abstract class InsertNode extends SearchNode {
   protected TSDataType[] dataTypes;
 
   protected TsTableColumnCategory[] columnCategories;
-  protected List<Integer> idColumnIndices;
+  protected List<Integer> tagColumnIndices;
   protected int measurementColumnCnt = -1;
 
   protected int failedMeasurementNumber = 0;
@@ -338,7 +337,8 @@ public abstract class InsertNode extends SearchNode {
 
   public boolean allMeasurementFailed() {
     if (measurements != null) {
-      return failedMeasurementNumber >= measurements.length;
+      return failedMeasurementNumber
+          >= measurements.length - (tagColumnIndices == null ? 0 : tagColumnIndices.size());
     }
     return true;
   }
@@ -397,10 +397,10 @@ public abstract class InsertNode extends SearchNode {
   public void setColumnCategories(TsTableColumnCategory[] columnCategories) {
     this.columnCategories = columnCategories;
     if (columnCategories != null) {
-      idColumnIndices = new ArrayList<>();
+      tagColumnIndices = new ArrayList<>();
       for (int i = 0; i < columnCategories.length; i++) {
         if (columnCategories[i].equals(TsTableColumnCategory.TAG)) {
-          idColumnIndices.add(i);
+          tagColumnIndices.add(i);
         }
       }
     }

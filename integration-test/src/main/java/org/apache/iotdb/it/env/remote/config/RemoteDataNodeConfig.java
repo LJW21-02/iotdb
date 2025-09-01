@@ -29,6 +29,16 @@ public class RemoteDataNodeConfig implements DataNodeConfig {
   }
 
   @Override
+  public DataNodeConfig setMetricPrometheusReporterUsername(String username) {
+    return this;
+  }
+
+  @Override
+  public DataNodeConfig setMetricPrometheusReporterPassword(String password) {
+    return this;
+  }
+
+  @Override
   public DataNodeConfig setEnableRestService(boolean enableRestService) {
     return this;
   }
@@ -46,6 +56,41 @@ public class RemoteDataNodeConfig implements DataNodeConfig {
 
   @Override
   public DataNodeConfig setCompactionScheduleInterval(long compactionScheduleInterval) {
+    return this;
+  }
+
+  @Override
+  public DataNodeConfig setEnableMQTTService(boolean enableMQTTService) {
+    return this;
+  }
+
+  @Override
+  public DataNodeConfig setMqttPayloadFormatter(String mqttPayloadFormatter) {
+    return this;
+  }
+
+  @Override
+  public DataNodeConfig setLoadLastCacheStrategy(String strategyName) {
+    return this;
+  }
+
+  @Override
+  public DataNodeConfig setCacheLastValuesForLoad(boolean cacheLastValuesForLoad) {
+    return this;
+  }
+
+  @Override
+  public DataNodeConfig setWalThrottleSize(long walThrottleSize) {
+    return this;
+  }
+
+  @Override
+  public DataNodeConfig setDeleteWalFilesPeriodInMs(long deleteWalFilesPeriodInMs) {
+    return this;
+  }
+
+  @Override
+  public DataNodeConfig setDataNodeMemoryProportion(String dataNodeMemoryProportion) {
     return this;
   }
 }

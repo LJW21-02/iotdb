@@ -69,6 +69,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
     try (final SyncConfigNodeIServiceClient client =
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // Check status
       Assert.assertEquals("RUNNING", showPipeResult.get(0).state);
@@ -100,6 +101,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
     try (final SyncConfigNodeIServiceClient client =
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // Check status
       Assert.assertEquals("STOPPED", showPipeResult.get(0).state);
@@ -117,6 +119,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
     try (final SyncConfigNodeIServiceClient client =
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // Check status
       Assert.assertEquals("STOPPED", showPipeResult.get(0).state);
@@ -154,6 +157,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
     try (final SyncConfigNodeIServiceClient client =
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // check status
       Assert.assertEquals("STOPPED", showPipeResult.get(0).state);
@@ -189,6 +193,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
     try (final SyncConfigNodeIServiceClient client =
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // Check status
       Assert.assertEquals("STOPPED", showPipeResult.get(0).state);
@@ -231,6 +236,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
     try (final SyncConfigNodeIServiceClient client =
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // check status
       Assert.assertEquals("RUNNING", showPipeResult.get(0).state);
@@ -267,6 +273,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
     try (final SyncConfigNodeIServiceClient client =
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // Check status
       Assert.assertEquals("RUNNING", showPipeResult.get(0).state);
@@ -303,6 +310,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
     try (final SyncConfigNodeIServiceClient client =
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // check status
       Assert.assertEquals("RUNNING", showPipeResult.get(0).state);
@@ -339,6 +347,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
     try (final SyncConfigNodeIServiceClient client =
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // check status
       Assert.assertEquals("RUNNING", showPipeResult.get(0).state);
@@ -375,6 +384,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
     try (final SyncConfigNodeIServiceClient client =
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // check status
       Assert.assertEquals("RUNNING", showPipeResult.get(0).state);
@@ -411,6 +421,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
     try (final SyncConfigNodeIServiceClient client =
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // Check status
       Assert.assertEquals("RUNNING", showPipeResult.get(0).state);
@@ -483,7 +494,8 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
         senderEnv,
         Arrays.asList(
             "insert into root.db.d1 (time, at1) values (1000, 1), (1500, 2), (2000, 3), (2500, 4), (3000, 5)",
-            "flush"))) {
+            "flush"),
+        null)) {
       fail();
     }
 
@@ -510,7 +522,8 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
         senderEnv,
         Arrays.asList(
             "insert into root.db.d2 (time, at1) values (11000, 1), (11500, 2), (12000, 3), (12500, 4), (13000, 5)",
-            "flush"))) {
+            "flush"),
+        null)) {
       fail();
     }
 
@@ -519,7 +532,8 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
         senderEnv,
         Arrays.asList(
             "insert into root.db.d1 (time, at1) values (11000, 1), (11500, 2), (12000, 3), (12500, 4), (13000, 5)",
-            "flush"))) {
+            "flush"),
+        null)) {
       fail();
     }
 
@@ -535,12 +549,15 @@ public class IoTDBPipeAlterIT extends AbstractPipeDualTreeModelAutoIT {
 
     // Create database on sender
     if (!TestUtils.tryExecuteNonQueryWithRetry(
-        senderEnv, "create timeSeries root.db.d2.at2 int32")) {
+        senderEnv, "create timeSeries root.db.d2.at2 int32", null)) {
       fail();
     }
 
     // Check database on receiver
     TestUtils.assertDataEventuallyOnEnv(
-        receiverEnv, "count timeSeries", "count(timeseries),", Collections.singleton("3,"));
+        receiverEnv,
+        "count timeSeries root.db.**",
+        "count(timeseries),",
+        Collections.singleton("3,"));
   }
 }

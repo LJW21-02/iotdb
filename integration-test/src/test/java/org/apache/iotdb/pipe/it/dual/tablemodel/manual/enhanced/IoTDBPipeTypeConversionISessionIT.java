@@ -32,6 +32,7 @@ import org.apache.iotdb.rpc.IoTDBConnectionException;
 import org.apache.iotdb.rpc.StatementExecutionException;
 
 import org.apache.tsfile.common.conf.TSFileConfig;
+import org.apache.tsfile.enums.ColumnCategory;
 import org.apache.tsfile.enums.TSDataType;
 import org.apache.tsfile.read.common.Field;
 import org.apache.tsfile.read.common.RowRecord;
@@ -39,9 +40,10 @@ import org.apache.tsfile.utils.Binary;
 import org.apache.tsfile.utils.DateUtils;
 import org.apache.tsfile.utils.Pair;
 import org.apache.tsfile.write.record.Tablet;
-import org.apache.tsfile.write.record.Tablet.ColumnCategory;
 import org.apache.tsfile.write.schema.IMeasurementSchema;
 import org.apache.tsfile.write.schema.MeasurementSchema;
+import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
@@ -64,6 +66,13 @@ import static org.junit.Assert.fail;
 @RunWith(IoTDBTestRunner.class)
 @Category({MultiClusterIT2DualTableManualEnhanced.class})
 public class IoTDBPipeTypeConversionISessionIT extends AbstractPipeTableModelDualManualIT {
+
+  @Override
+  @Before
+  public void setUp() {
+    super.setUp();
+  }
+
   private static final int generateDataSize = 1000;
 
   @Test
@@ -76,6 +85,7 @@ public class IoTDBPipeTypeConversionISessionIT extends AbstractPipeTableModelDua
   }
 
   @Test
+  @Ignore("The receiver conversion is currently banned, will ignore conflict")
   public void insertTabletReceiveByTsFile() {
     prepareTypeConversionTest(
         (ITableSession senderSession, ITableSession receiverSession, Tablet tablet) -> {
@@ -118,6 +128,8 @@ public class IoTDBPipeTypeConversionISessionIT extends AbstractPipeTableModelDua
         createDataPipe(true);
       } else {
         // Send Tablet data to receiver
+        // Write once to create data regions, guarantee that no any tsFiles will be sent
+        executeDataWriteOperation.accept(senderSession, receiverSession, tablet);
         createDataPipe(false);
         // The actual implementation logic of inserting data
         executeDataWriteOperation.accept(senderSession, receiverSession, tablet);
@@ -159,7 +171,7 @@ public class IoTDBPipeTypeConversionISessionIT extends AbstractPipeTableModelDua
   private void createDatabaseAndTable(
       List<Pair<MeasurementSchema, MeasurementSchema>> measurementSchemas,
       boolean isLeft,
-      List<Tablet.ColumnCategory> categories,
+      List<ColumnCategory> categories,
       BaseEnv env) {
     StringBuilder builder = new StringBuilder();
     for (int i = 0; i < measurementSchemas.size(); i++) {
@@ -177,22 +189,24 @@ public class IoTDBPipeTypeConversionISessionIT extends AbstractPipeTableModelDua
         null,
         "table",
         env,
-        Arrays.asList("create database if not exists test", "use test", tableCreation));
+        Arrays.asList("create database if not exists test", "use test", tableCreation),
+        null);
   }
 
   private void createDataPipe(boolean isTSFile) {
     String sql =
         String.format(
             "create pipe test"
-                + " with source ('source'='iotdb-source','realtime.mode'='%s')"
+                + " with source ('source'='iotdb-source','realtime.mode'='%s','history.enable'='%s')"
                 + " with processor ('processor'='do-nothing-processor')"
                 + " with sink ('node-urls'='%s:%s','batch.enable'='false','sink.format'='%s')",
             isTSFile ? "file" : "forced-log",
+            isTSFile,
             receiverEnv.getIP(),
             receiverEnv.getPort(),
             isTSFile ? "tsfile" : "tablet");
     TestUtils.tryExecuteNonQueriesWithRetry(
-        null, BaseEnv.TABLE_SQL_DIALECT, senderEnv, Collections.singletonList(sql));
+        null, BaseEnv.TABLE_SQL_DIALECT, senderEnv, Collections.singletonList(sql), null);
   }
 
   private void validateResultSet(
@@ -449,7 +463,7 @@ public class IoTDBPipeTypeConversionISessionIT extends AbstractPipeTableModelDua
       schemaList.add(pair.left);
     }
 
-    final List<Tablet.ColumnCategory> columnTypes = generateTabletColumnCategory(pairs.size());
+    final List<ColumnCategory> columnTypes = generateTabletColumnCategory(pairs.size());
     Tablet tablet =
         new Tablet(
             tableName,
@@ -494,12 +508,12 @@ public class IoTDBPipeTypeConversionISessionIT extends AbstractPipeTableModelDua
     return tablet;
   }
 
-  private List<Tablet.ColumnCategory> generateTabletColumnCategory(int size) {
-    List<Tablet.ColumnCategory> columnTypes = new ArrayList<>(size);
-    columnTypes.add(Tablet.ColumnCategory.TAG);
-    columnTypes.add(Tablet.ColumnCategory.TAG);
-    columnTypes.add(Tablet.ColumnCategory.TAG);
-    columnTypes.add(Tablet.ColumnCategory.TAG);
+  private List<ColumnCategory> generateTabletColumnCategory(int size) {
+    List<ColumnCategory> columnTypes = new ArrayList<>(size);
+    columnTypes.add(ColumnCategory.TAG);
+    columnTypes.add(ColumnCategory.TAG);
+    columnTypes.add(ColumnCategory.TAG);
+    columnTypes.add(ColumnCategory.TAG);
     for (int i = 0; i < size - 4; i++) {
       columnTypes.add(ColumnCategory.FIELD);
     }

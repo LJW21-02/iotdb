@@ -20,9 +20,11 @@
 package org.apache.iotdb.db.pipe.event.common.tsfile.parser;
 
 import org.apache.iotdb.commons.pipe.agent.task.meta.PipeTaskMeta;
+import org.apache.iotdb.commons.pipe.config.PipeConfig;
 import org.apache.iotdb.commons.pipe.datastructure.pattern.TablePattern;
 import org.apache.iotdb.commons.pipe.datastructure.pattern.TreePattern;
 import org.apache.iotdb.db.pipe.event.common.PipeInsertionEvent;
+import org.apache.iotdb.db.pipe.metric.overview.PipeTsFileToTabletsMetrics;
 import org.apache.iotdb.db.pipe.resource.PipeDataNodeResourceManager;
 import org.apache.iotdb.db.pipe.resource.memory.PipeMemoryBlock;
 import org.apache.iotdb.pipe.api.event.dml.insertion.TabletInsertionEvent;
@@ -39,6 +41,9 @@ public abstract class TsFileInsertionEventParser implements AutoCloseable {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(TsFileInsertionEventParser.class);
 
+  protected final String pipeName;
+  protected final long creationTime;
+
   protected final TreePattern treePattern; // used to filter data
   protected final TablePattern tablePattern; // used to filter data
   protected final GlobalTimeExpression timeFilterExpression; // used to filter data
@@ -48,17 +53,27 @@ public abstract class TsFileInsertionEventParser implements AutoCloseable {
   protected final PipeTaskMeta pipeTaskMeta; // used to report progress
   protected final PipeInsertionEvent sourceEvent; // used to report progress
 
+  protected final long initialTimeNano = System.nanoTime();
+  protected boolean timeUsageReported = false;
+
   protected final PipeMemoryBlock allocatedMemoryBlockForTablet;
 
   protected TsFileSequenceReader tsFileSequenceReader;
 
+  protected Iterable<TabletInsertionEvent> tabletInsertionIterable;
+
   protected TsFileInsertionEventParser(
+      final String pipeName,
+      final long creationTime,
       final TreePattern treePattern,
       final TablePattern tablePattern,
       final long startTime,
       final long endTime,
       final PipeTaskMeta pipeTaskMeta,
       final PipeInsertionEvent sourceEvent) {
+    this.pipeName = pipeName;
+    this.creationTime = creationTime;
+
     this.treePattern = treePattern;
     this.tablePattern = tablePattern;
     timeFilterExpression =
@@ -71,9 +86,10 @@ public abstract class TsFileInsertionEventParser implements AutoCloseable {
     this.pipeTaskMeta = pipeTaskMeta;
     this.sourceEvent = sourceEvent;
 
-    // Allocate empty memory block, will be resized later.
     this.allocatedMemoryBlockForTablet =
-        PipeDataNodeResourceManager.memory().forceAllocateForTabletWithRetry(0);
+        PipeDataNodeResourceManager.memory()
+            .forceAllocateForTabletWithRetry(
+                PipeConfig.getInstance().getPipeDataStructureTabletSizeInBytes());
   }
 
   /**
@@ -83,6 +99,20 @@ public abstract class TsFileInsertionEventParser implements AutoCloseable {
 
   @Override
   public void close() {
+
+    tabletInsertionIterable = null;
+
+    try {
+      if (pipeName != null && !timeUsageReported) {
+        PipeTsFileToTabletsMetrics.getInstance()
+            .recordTsFileToTabletTime(
+                pipeName + "_" + creationTime, System.nanoTime() - initialTimeNano);
+        timeUsageReported = true;
+      }
+    } catch (final Exception e) {
+      LOGGER.warn("Failed to report time usage for parsing tsfile for pipe {}", pipeName, e);
+    }
+
     try {
       if (tsFileSequenceReader != null) {
         tsFileSequenceReader.close();

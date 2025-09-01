@@ -195,6 +195,13 @@ struct TSetThrottleQuotaReq {
   2: required TThrottleQuota throttleQuota
 }
 
+struct TPipeHeartbeatResp {
+  1: required list<binary> pipeMetaList
+  2: optional list<bool> pipeCompletedList
+  3: optional list<i64> pipeRemainingEventCountList
+  4: optional list<double> pipeRemainingTimeList
+}
+
 struct TLicense {
     1: required i64 licenseIssueTimestamp
     2: required i64 expireTimestamp
@@ -228,6 +235,7 @@ enum TServiceType {
 struct TServiceProvider {
   1: required TEndPoint endPoint
   2: required TServiceType serviceType
+  3: required i32 nodeId
 }
 
 struct TSender {
@@ -282,7 +290,10 @@ enum TAggregationType {
   LAST_BY,
   MIN,
   MAX,
-  COUNT_ALL
+  COUNT_ALL,
+  APPROX_COUNT_DISTINCT,
+  APPROX_MOST_FREQUENT,
+  APPROX_PERCENTILE,
 }
 
 struct TShowConfigurationTemplateResp {

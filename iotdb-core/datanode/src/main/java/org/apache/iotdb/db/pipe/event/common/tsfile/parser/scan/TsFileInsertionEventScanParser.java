@@ -20,6 +20,7 @@
 package org.apache.iotdb.db.pipe.event.common.tsfile.parser.scan;
 
 import org.apache.iotdb.commons.pipe.agent.task.meta.PipeTaskMeta;
+import org.apache.iotdb.commons.pipe.config.PipeConfig;
 import org.apache.iotdb.commons.pipe.datastructure.pattern.TreePattern;
 import org.apache.iotdb.db.pipe.event.common.PipeInsertionEvent;
 import org.apache.iotdb.db.pipe.event.common.tablet.PipeRawTabletInsertionEvent;
@@ -70,6 +71,7 @@ public class TsFileInsertionEventScanParser extends TsFileInsertionEventParser {
   private IChunkReader chunkReader;
   private BatchData data;
   private final PipeMemoryBlock allocatedMemoryBlockForBatchData;
+  private final PipeMemoryBlock allocatedMemoryBlockForChunk;
 
   private boolean currentIsMultiPage;
   private IDeviceID currentDevice;
@@ -87,6 +89,8 @@ public class TsFileInsertionEventScanParser extends TsFileInsertionEventParser {
   private byte lastMarker = Byte.MIN_VALUE;
 
   public TsFileInsertionEventScanParser(
+      final String pipeName,
+      final long creationTime,
       final File tsFile,
       final TreePattern pattern,
       final long startTime,
@@ -94,15 +98,20 @@ public class TsFileInsertionEventScanParser extends TsFileInsertionEventParser {
       final PipeTaskMeta pipeTaskMeta,
       final PipeInsertionEvent sourceEvent)
       throws IOException {
-    super(pattern, null, startTime, endTime, pipeTaskMeta, sourceEvent);
+    super(pipeName, creationTime, pattern, null, startTime, endTime, pipeTaskMeta, sourceEvent);
 
     this.startTime = startTime;
     this.endTime = endTime;
     filter = Objects.nonNull(timeFilterExpression) ? timeFilterExpression.getFilter() : null;
 
-    // Allocate empty memory block, will be resized later.
     this.allocatedMemoryBlockForBatchData =
-        PipeDataNodeResourceManager.memory().forceAllocateForTabletWithRetry(0);
+        PipeDataNodeResourceManager.memory()
+            .forceAllocateForTabletWithRetry(
+                PipeConfig.getInstance().getPipeDataStructureTabletSizeInBytes());
+    this.allocatedMemoryBlockForChunk =
+        PipeDataNodeResourceManager.memory()
+            .forceAllocateForTabletWithRetry(
+                PipeConfig.getInstance().getPipeMaxAlignedSeriesChunkSizeInOneBatch());
 
     try {
       tsFileSequenceReader = new TsFileSequenceReader(tsFile.getAbsolutePath(), false, false);
@@ -115,48 +124,80 @@ public class TsFileInsertionEventScanParser extends TsFileInsertionEventParser {
     }
   }
 
+  public TsFileInsertionEventScanParser(
+      final File tsFile,
+      final TreePattern pattern,
+      final long startTime,
+      final long endTime,
+      final PipeTaskMeta pipeTaskMeta,
+      final PipeInsertionEvent sourceEvent)
+      throws IOException {
+    this(null, 0, tsFile, pattern, startTime, endTime, pipeTaskMeta, sourceEvent);
+  }
+
   @Override
   public Iterable<TabletInsertionEvent> toTabletInsertionEvents() {
-    return () ->
-        new Iterator<TabletInsertionEvent>() {
+    if (tabletInsertionIterable == null) {
+      tabletInsertionIterable =
+          () ->
+              new Iterator<TabletInsertionEvent>() {
 
-          @Override
-          public boolean hasNext() {
-            return Objects.nonNull(chunkReader);
-          }
+                @Override
+                public boolean hasNext() {
+                  return Objects.nonNull(chunkReader);
+                }
 
-          @Override
-          public TabletInsertionEvent next() {
-            if (!hasNext()) {
-              close();
-              throw new NoSuchElementException();
-            }
+                @Override
+                public TabletInsertionEvent next() {
+                  if (!hasNext()) {
+                    close();
+                    throw new NoSuchElementException();
+                  }
 
-            // currentIsAligned is initialized when TsFileInsertionEventScanParser is constructed.
-            // When the getNextTablet function is called, currentIsAligned may be updated, causing
-            // the currentIsAligned information to be inconsistent with the current Tablet
-            // information.
-            final boolean isAligned = currentIsAligned;
-            final Tablet tablet = getNextTablet();
-            final boolean hasNext = hasNext();
-            try {
-              return new PipeRawTabletInsertionEvent(
-                  sourceEvent != null ? sourceEvent.isTableModelEvent() : null,
-                  sourceEvent != null ? sourceEvent.getTreeModelDatabaseName() : null,
-                  tablet,
-                  isAligned,
-                  sourceEvent != null ? sourceEvent.getPipeName() : null,
-                  sourceEvent != null ? sourceEvent.getCreationTime() : 0,
-                  pipeTaskMeta,
-                  sourceEvent,
-                  !hasNext);
-            } finally {
-              if (!hasNext) {
-                close();
-              }
-            }
-          }
-        };
+                  // currentIsAligned is initialized when TsFileInsertionEventScanParser is
+                  // constructed.
+                  // When the getNextTablet function is called, currentIsAligned may be updated,
+                  // causing
+                  // the currentIsAligned information to be inconsistent with the current Tablet
+                  // information.
+                  final boolean isAligned = currentIsAligned;
+                  final Tablet tablet = getNextTablet();
+                  final boolean hasNext = hasNext();
+                  try {
+                    return sourceEvent == null
+                        ? new PipeRawTabletInsertionEvent(
+                            null,
+                            null,
+                            null,
+                            null,
+                            tablet,
+                            isAligned,
+                            null,
+                            0,
+                            pipeTaskMeta,
+                            sourceEvent,
+                            !hasNext)
+                        : new PipeRawTabletInsertionEvent(
+                            sourceEvent.getRawIsTableModelEvent(),
+                            sourceEvent.getSourceDatabaseNameFromDataRegion(),
+                            sourceEvent.getRawTableModelDataBase(),
+                            sourceEvent.getRawTreeModelDataBase(),
+                            tablet,
+                            isAligned,
+                            sourceEvent.getPipeName(),
+                            sourceEvent.getCreationTime(),
+                            pipeTaskMeta,
+                            sourceEvent,
+                            !hasNext);
+                  } finally {
+                    if (!hasNext) {
+                      close();
+                    }
+                  }
+                }
+              };
+    }
+    return tabletInsertionIterable;
   }
 
   public Iterable<Pair<Tablet, Boolean>> toTabletWithIsAligneds() {
@@ -199,8 +240,6 @@ public class TsFileInsertionEventScanParser extends TsFileInsertionEventParser {
       if (!data.hasCurrent()) {
         tablet = new Tablet(currentDevice.toString(), currentMeasurements, 1);
         tablet.initBitMaps();
-        // Ignore the memory cost of tablet
-        PipeDataNodeResourceManager.memory().forceResize(allocatedMemoryBlockForTablet, 0);
         return tablet;
       }
 
@@ -216,8 +255,11 @@ public class TsFileInsertionEventScanParser extends TsFileInsertionEventParser {
                 new Tablet(
                     currentDevice.toString(), currentMeasurements, rowCountAndMemorySize.getLeft());
             tablet.initBitMaps();
-            PipeDataNodeResourceManager.memory()
-                .forceResize(allocatedMemoryBlockForTablet, rowCountAndMemorySize.getRight());
+            if (allocatedMemoryBlockForTablet.getMemoryUsageInBytes()
+                < rowCountAndMemorySize.getRight()) {
+              PipeDataNodeResourceManager.memory()
+                  .forceResize(allocatedMemoryBlockForTablet, rowCountAndMemorySize.getRight());
+            }
             isFirstRow = false;
           }
 
@@ -240,8 +282,6 @@ public class TsFileInsertionEventScanParser extends TsFileInsertionEventParser {
       if (tablet == null) {
         tablet = new Tablet(currentDevice.toString(), currentMeasurements, 1);
         tablet.initBitMaps();
-        // Ignore the memory cost of tablet
-        PipeDataNodeResourceManager.memory().forceResize(allocatedMemoryBlockForTablet, 0);
       }
 
       // Switch chunk reader iff current chunk is all consumed
@@ -268,10 +308,10 @@ public class TsFileInsertionEventScanParser extends TsFileInsertionEventParser {
 
       do {
         data = chunkReader.nextPageData();
-        PipeDataNodeResourceManager.memory()
-            .forceResize(
-                allocatedMemoryBlockForBatchData,
-                PipeMemoryWeightUtil.calculateBatchDataRamBytesUsed(data));
+        long size = PipeMemoryWeightUtil.calculateBatchDataRamBytesUsed(data);
+        if (allocatedMemoryBlockForBatchData.getMemoryUsageInBytes() < size) {
+          PipeDataNodeResourceManager.memory().forceResize(allocatedMemoryBlockForBatchData, size);
+        }
       } while (!data.hasCurrent() && chunkReader.hasNextSatisfiedPage());
     } while (!data.hasCurrent());
   }
@@ -346,6 +386,7 @@ public class TsFileInsertionEventScanParser extends TsFileInsertionEventParser {
 
   private void moveToNextChunkReader() throws IOException, IllegalStateException {
     ChunkHeader chunkHeader;
+    long valueChunkSize = 0;
     final List<Chunk> valueChunkList = new ArrayList<>();
     currentMeasurements.clear();
 
@@ -390,6 +431,11 @@ public class TsFileInsertionEventScanParser extends TsFileInsertionEventParser {
             break;
           }
 
+          if (chunkHeader.getDataSize() > allocatedMemoryBlockForChunk.getMemoryUsageInBytes()) {
+            PipeDataNodeResourceManager.memory()
+                .forceResize(allocatedMemoryBlockForChunk, chunkHeader.getDataSize());
+          }
+
           chunkReader =
               currentIsMultiPage
                   ? new ChunkReader(
@@ -423,14 +469,32 @@ public class TsFileInsertionEventScanParser extends TsFileInsertionEventParser {
                     chunkHeader.getMeasurementID(),
                     (measurement, index) -> Objects.nonNull(index) ? index + 1 : 0);
 
-            // Emit when encountered non-sequential value chunk
+            // Emit when encountered non-sequential value chunk, or the chunk size exceeds
+            // certain value to avoid OOM
             // Do not record or end current value chunks when there are empty chunks
             if (chunkHeader.getDataSize() == 0) {
               break;
             }
             boolean needReturn = false;
-            if (lastIndex >= 0 && valueIndex != lastIndex) {
-              needReturn = recordAlignedChunk(valueChunkList, marker);
+            final long timeChunkSize =
+                lastIndex >= 0
+                    ? PipeMemoryWeightUtil.calculateChunkRamBytesUsed(timeChunkList.get(lastIndex))
+                    : 0;
+            if (lastIndex >= 0) {
+              if (valueIndex != lastIndex) {
+                needReturn = recordAlignedChunk(valueChunkList, marker);
+              } else {
+                final long chunkSize = timeChunkSize + valueChunkSize;
+                if (chunkSize + chunkHeader.getDataSize()
+                    > allocatedMemoryBlockForChunk.getMemoryUsageInBytes()) {
+                  if (valueChunkList.size() == 1
+                      && chunkSize > allocatedMemoryBlockForChunk.getMemoryUsageInBytes()) {
+                    PipeDataNodeResourceManager.memory()
+                        .forceResize(allocatedMemoryBlockForChunk, chunkSize);
+                  }
+                  needReturn = recordAlignedChunk(valueChunkList, marker);
+                }
+              }
             }
             lastIndex = valueIndex;
             if (needReturn) {
@@ -442,6 +506,7 @@ public class TsFileInsertionEventScanParser extends TsFileInsertionEventParser {
             firstChunkHeader4NextSequentialValueChunks = null;
           }
 
+          valueChunkSize += chunkHeader.getDataSize();
           valueChunkList.add(
               new Chunk(
                   chunkHeader, tsFileSequenceReader.readChunk(-1, chunkHeader.getDataSize())));
@@ -498,6 +563,10 @@ public class TsFileInsertionEventScanParser extends TsFileInsertionEventParser {
 
     if (allocatedMemoryBlockForBatchData != null) {
       allocatedMemoryBlockForBatchData.close();
+    }
+
+    if (allocatedMemoryBlockForChunk != null) {
+      allocatedMemoryBlockForChunk.close();
     }
   }
 }

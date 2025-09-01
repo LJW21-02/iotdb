@@ -75,7 +75,10 @@ public class IoTDBPipeProtocolIT extends AbstractPipeTableModelDualManualIT {
         .setSchemaRegionConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS)
         .setDataRegionConsensusProtocolClass(dataRegionConsensus)
         .setSchemaReplicationFactor(schemaRegionReplicationFactor)
-        .setDataReplicationFactor(dataRegionReplicationFactor);
+        .setDataReplicationFactor(dataRegionReplicationFactor)
+        .setDnConnectionTimeoutMs(600000)
+        .setPipeMemoryManagementEnabled(false)
+        .setIsPipeEnableMemoryCheck(false);
     receiverEnv
         .getConfig()
         .getCommonConfig()
@@ -84,11 +87,10 @@ public class IoTDBPipeProtocolIT extends AbstractPipeTableModelDualManualIT {
         .setSchemaRegionConsensusProtocolClass(schemaRegionConsensus)
         .setDataRegionConsensusProtocolClass(dataRegionConsensus)
         .setSchemaReplicationFactor(schemaRegionReplicationFactor)
-        .setDataReplicationFactor(dataRegionReplicationFactor);
-
-    // 10 min, assert that the operations will not time out
-    senderEnv.getConfig().getCommonConfig().setDnConnectionTimeoutMs(600000);
-    receiverEnv.getConfig().getCommonConfig().setDnConnectionTimeoutMs(600000);
+        .setDataReplicationFactor(dataRegionReplicationFactor)
+        .setDnConnectionTimeoutMs(600000)
+        .setPipeMemoryManagementEnabled(false)
+        .setIsPipeEnableMemoryCheck(false);
 
     senderEnv.initClusterEnvironment(configNodesNum, dataNodesNum);
     receiverEnv.initClusterEnvironment(configNodesNum, dataNodesNum);
@@ -169,7 +171,10 @@ public class IoTDBPipeProtocolIT extends AbstractPipeTableModelDualManualIT {
         .setSchemaRegionConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS)
         .setDataRegionConsensusProtocolClass(ConsensusFactory.IOT_CONSENSUS)
         .setSchemaReplicationFactor(3)
-        .setDataReplicationFactor(2);
+        .setDataReplicationFactor(2)
+        .setDnConnectionTimeoutMs(600000)
+        .setPipeMemoryManagementEnabled(false)
+        .setIsPipeEnableMemoryCheck(false);
     receiverEnv
         .getConfig()
         .getCommonConfig()
@@ -178,11 +183,10 @@ public class IoTDBPipeProtocolIT extends AbstractPipeTableModelDualManualIT {
         .setSchemaRegionConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS)
         .setDataRegionConsensusProtocolClass(ConsensusFactory.IOT_CONSENSUS)
         .setSchemaReplicationFactor(1)
-        .setDataReplicationFactor(1);
-
-    // 10 min, assert that the operations will not time out
-    senderEnv.getConfig().getCommonConfig().setDnConnectionTimeoutMs(600000);
-    receiverEnv.getConfig().getCommonConfig().setDnConnectionTimeoutMs(600000);
+        .setDataReplicationFactor(1)
+        .setDnConnectionTimeoutMs(600000)
+        .setPipeMemoryManagementEnabled(false)
+        .setIsPipeEnableMemoryCheck(false);
 
     senderEnv.initClusterEnvironment(3, 3);
     receiverEnv.initClusterEnvironment(1, 1);
@@ -216,6 +220,7 @@ public class IoTDBPipeProtocolIT extends AbstractPipeTableModelDualManualIT {
       extractorAttributes.put("mode.streaming", "true");
       extractorAttributes.put("mode.snapshot", "false");
       extractorAttributes.put("mode.strict", "true");
+      extractorAttributes.put("user", "root");
 
       connectorAttributes.put("connector", "iotdb-thrift-connector");
       connectorAttributes.put("connector.batch.enable", "false");
@@ -260,6 +265,7 @@ public class IoTDBPipeProtocolIT extends AbstractPipeTableModelDualManualIT {
       extractorAttributes.put("mode.streaming", "true");
       extractorAttributes.put("mode.snapshot", "false");
       extractorAttributes.put("mode.strict", "true");
+      extractorAttributes.put("user", "root");
 
       connectorAttributes.put("connector", "iotdb-thrift-connector");
       connectorAttributes.put("connector.batch.enable", "false");
@@ -312,6 +318,7 @@ public class IoTDBPipeProtocolIT extends AbstractPipeTableModelDualManualIT {
       extractorAttributes.put("mode.streaming", "true");
       extractorAttributes.put("mode.snapshot", "false");
       extractorAttributes.put("mode.strict", "true");
+      extractorAttributes.put("user", "root");
 
       connectorAttributes.put("connector", "iotdb-thrift-connector");
       connectorAttributes.put("connector.batch.enable", "false");
@@ -375,7 +382,10 @@ public class IoTDBPipeProtocolIT extends AbstractPipeTableModelDualManualIT {
         .setDataReplicationFactor(1)
         .setEnableSeqSpaceCompaction(false)
         .setEnableUnseqSpaceCompaction(false)
-        .setEnableCrossSpaceCompaction(false);
+        .setEnableCrossSpaceCompaction(false)
+        .setDnConnectionTimeoutMs(600000)
+        .setPipeMemoryManagementEnabled(false)
+        .setIsPipeEnableMemoryCheck(false);
     receiverEnv
         .getConfig()
         .getCommonConfig()
@@ -385,11 +395,10 @@ public class IoTDBPipeProtocolIT extends AbstractPipeTableModelDualManualIT {
         .setSchemaRegionConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS)
         .setDataRegionConsensusProtocolClass(ConsensusFactory.IOT_CONSENSUS)
         .setSchemaReplicationFactor(3)
-        .setDataReplicationFactor(2);
-
-    // 10 min, assert that the operations will not time out
-    senderEnv.getConfig().getCommonConfig().setDnConnectionTimeoutMs(600000);
-    receiverEnv.getConfig().getCommonConfig().setDnConnectionTimeoutMs(600000);
+        .setDataReplicationFactor(2)
+        .setDnConnectionTimeoutMs(600000)
+        .setPipeMemoryManagementEnabled(false)
+        .setIsPipeEnableMemoryCheck(false);
 
     senderEnv.initClusterEnvironment(1, 1);
     receiverEnv.initClusterEnvironment(1, 3);
@@ -439,6 +448,7 @@ public class IoTDBPipeProtocolIT extends AbstractPipeTableModelDualManualIT {
       extractorAttributes.put("inclusion", "data.insert");
       extractorAttributes.put("mode.snapshot", "false");
       extractorAttributes.put("mode.strict", "true");
+      extractorAttributes.put("user", "root");
 
       // Test forced-log mode, in open releases this might be "file"
       extractorAttributes.put("realtime.mode", "forced-log");

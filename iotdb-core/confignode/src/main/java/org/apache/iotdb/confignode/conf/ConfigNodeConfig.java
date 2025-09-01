@@ -82,6 +82,8 @@ public class ConfigNodeConfig {
   private String seriesPartitionExecutorClass =
       "org.apache.iotdb.commons.partition.executor.hash.BKDRHashExecutor";
 
+  private String dataPartitionAllocationStrategy = "INHERIT";
+
   /** The policy of extension SchemaRegionGroup for each Database. */
   private RegionGroupExtensionPolicy schemaRegionGroupExtensionPolicy =
       RegionGroupExtensionPolicy.AUTO;
@@ -114,14 +116,14 @@ public class ConfigNodeConfig {
   private int dataRegionPerDataNode = 0;
 
   /** each dataNode automatically has the number of CPU cores / 2 regions. */
-  private double dataRegionPerDataNodeProportion = 0.5;
+  private final double dataRegionPerDataNodeProportion = 0.5;
 
   /** RegionGroup allocate policy. */
   private RegionBalancer.RegionGroupAllocatePolicy regionGroupAllocatePolicy =
       RegionBalancer.RegionGroupAllocatePolicy.GCR;
 
   /** Max concurrent client number. */
-  private int rpcMaxConcurrentClientNum = 65535;
+  private int rpcMaxConcurrentClientNum = 3000;
 
   /** just for test wait for 60 second by default. */
   private int thriftServerAwaitTimeForStopService = 60;
@@ -192,9 +194,6 @@ public class ConfigNodeConfig {
 
   /** Acceptable pause duration for Phi accrual failure detector */
   private long failureDetectorPhiAcceptablePauseInMs = 10000;
-
-  /** The unknown DataNode detect interval in milliseconds. */
-  private long unknownDataNodeDetectInterval = heartbeatIntervalInMs;
 
   /** The policy of cluster RegionGroups' leader distribution. */
   private String leaderDistributionPolicy = AbstractLeaderBalancer.CFD_POLICY;
@@ -296,6 +295,8 @@ public class ConfigNodeConfig {
   /* first election timeout shares between 3 regions. */
   private long ratisFirstElectionTimeoutMinMs = 50;
   private long ratisFirstElectionTimeoutMaxMs = 150;
+
+  private int ratisTransferLeaderTimeoutMs = 30 * 1000; // 30s
 
   private long configNodeRatisLogMax = 2L * 1024 * 1024 * 1024; // 2G
   private long schemaRegionRatisLogMax = 2L * 1024 * 1024 * 1024; // 2G
@@ -422,6 +423,14 @@ public class ConfigNodeConfig {
 
   public void setSeriesPartitionExecutorClass(String seriesPartitionExecutorClass) {
     this.seriesPartitionExecutorClass = seriesPartitionExecutorClass;
+  }
+
+  public String getDataPartitionAllocationStrategy() {
+    return dataPartitionAllocationStrategy;
+  }
+
+  public void setDataPartitionAllocationStrategy(String dataPartitionAllocationStrategy) {
+    this.dataPartitionAllocationStrategy = dataPartitionAllocationStrategy;
   }
 
   public int getCnRpcMaxConcurrentClientNum() {
@@ -658,14 +667,6 @@ public class ConfigNodeConfig {
 
   public void setHeartbeatIntervalInMs(long heartbeatIntervalInMs) {
     this.heartbeatIntervalInMs = heartbeatIntervalInMs;
-  }
-
-  public long getUnknownDataNodeDetectInterval() {
-    return unknownDataNodeDetectInterval;
-  }
-
-  public void setUnknownDataNodeDetectInterval(long unknownDataNodeDetectInterval) {
-    this.unknownDataNodeDetectInterval = unknownDataNodeDetectInterval;
   }
 
   public String getLeaderDistributionPolicy() {
@@ -1115,6 +1116,14 @@ public class ConfigNodeConfig {
 
   public void setRatisFirstElectionTimeoutMaxMs(long ratisFirstElectionTimeoutMaxMs) {
     this.ratisFirstElectionTimeoutMaxMs = ratisFirstElectionTimeoutMaxMs;
+  }
+
+  public int getRatisTransferLeaderTimeoutMs() {
+    return ratisTransferLeaderTimeoutMs;
+  }
+
+  public void setRatisTransferLeaderTimeoutMs(int ratisTransferLeaderTimeoutMs) {
+    this.ratisTransferLeaderTimeoutMs = ratisTransferLeaderTimeoutMs;
   }
 
   public long getConfigNodeRatisLogMax() {

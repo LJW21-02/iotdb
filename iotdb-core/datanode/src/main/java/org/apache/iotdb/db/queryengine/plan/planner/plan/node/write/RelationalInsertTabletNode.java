@@ -115,10 +115,10 @@ public class RelationalInsertTabletNode extends InsertTabletNode {
         deviceIDs = new IDeviceID[1];
       }
       if (deviceIDs[0] == null) {
-        String[] deviceIdSegments = new String[idColumnIndices.size() + 1];
+        String[] deviceIdSegments = new String[tagColumnIndices.size() + 1];
         deviceIdSegments[0] = this.getTableName();
-        for (int i = 0; i < idColumnIndices.size(); i++) {
-          final Integer columnIndex = idColumnIndices.get(i);
+        for (int i = 0; i < tagColumnIndices.size(); i++) {
+          final Integer columnIndex = tagColumnIndices.get(i);
           Object idSeg = ((Object[]) columns[columnIndex])[0];
           boolean isNull =
               bitMaps != null && bitMaps[columnIndex] != null && bitMaps[columnIndex].isMarked(0);
@@ -132,10 +132,10 @@ public class RelationalInsertTabletNode extends InsertTabletNode {
       deviceIDs = new IDeviceID[rowCount];
     }
     if (deviceIDs[rowIdx] == null) {
-      String[] deviceIdSegments = new String[idColumnIndices.size() + 1];
+      String[] deviceIdSegments = new String[tagColumnIndices.size() + 1];
       deviceIdSegments[0] = this.getTableName();
-      for (int i = 0; i < idColumnIndices.size(); i++) {
-        final Integer columnIndex = idColumnIndices.get(i);
+      for (int i = 0; i < tagColumnIndices.size(); i++) {
+        final Integer columnIndex = tagColumnIndices.get(i);
         Object idSeg = ((Object[]) columns[columnIndex])[rowIdx];
         boolean isNull =
             bitMaps != null
@@ -353,16 +353,16 @@ public class RelationalInsertTabletNode extends InsertTabletNode {
   }
 
   @Override
-  public void updateLastCache(String databaseName) {
-    String[] rawMeasurements = getRawMeasurements();
+  public void updateLastCache(final String databaseName) {
+    final String[] rawMeasurements = getRawMeasurements();
 
-    List<Pair<IDeviceID, Integer>> deviceEndOffsetPairs = splitByDevice(0, rowCount);
+    final List<Pair<IDeviceID, Integer>> deviceEndOffsetPairs = splitByDevice(0, rowCount);
     int startOffset = 0;
-    for (Pair<IDeviceID, Integer> deviceEndOffsetPair : deviceEndOffsetPairs) {
-      IDeviceID deviceID = deviceEndOffsetPair.getLeft();
-      int endOffset = deviceEndOffsetPair.getRight();
+    for (final Pair<IDeviceID, Integer> deviceEndOffsetPair : deviceEndOffsetPairs) {
+      final IDeviceID deviceID = deviceEndOffsetPair.getLeft();
+      final int endOffset = deviceEndOffsetPair.getRight();
 
-      TimeValuePair[] timeValuePairs = new TimeValuePair[rawMeasurements.length];
+      final TimeValuePair[] timeValuePairs = new TimeValuePair[rawMeasurements.length];
       for (int i = 0; i < rawMeasurements.length; i++) {
         timeValuePairs[i] = composeLastTimeValuePair(i, startOffset, endOffset);
       }

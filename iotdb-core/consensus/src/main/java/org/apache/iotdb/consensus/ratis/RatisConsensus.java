@@ -141,7 +141,7 @@ class RatisConsensus implements IConsensus {
   private final RatisConfig.Read.Option readOption;
   private final RetryPolicy<RaftClientReply> readRetryPolicy;
   private final RetryPolicy<RaftClientReply> writeRetryPolicy;
-
+  private final int transferLeadershipTimeoutMs;
   private final RatisMetricSet ratisMetricSet;
   private final TConsensusGroupType consensusGroupType;
 
@@ -165,6 +165,8 @@ class RatisConsensus implements IConsensus {
         this.readOption == RatisConfig.Read.Option.DEFAULT ? new ConcurrentHashMap<>() : null;
     this.consensusGroupType = config.getConsensusGroupType();
     this.ratisMetricSet = new RatisMetricSet();
+    this.transferLeadershipTimeoutMs =
+        config.getRatisConfig().getUtils().getTransferLeaderTimeoutMs();
     this.readRetryPolicy =
         RetryPolicy.<RaftClientReply>newBuilder()
             .setRetryHandler(
@@ -324,6 +326,8 @@ class RatisConsensus implements IConsensus {
     }
 
     // current Peer is group leader and in ReadOnly State
+    // We only judge dataRegions here, because schema write when readOnly is handled at
+    // RegionWriteExecutor
     if (isLeader(groupId) && Utils.rejectWrite(consensusGroupType)) {
       try {
         forceStepDownLeader(raftGroup);
@@ -702,10 +706,22 @@ class RatisConsensus implements IConsensus {
     try {
       reply = transferLeader(raftGroup, newRaftLeader);
       if (!reply.isSuccess()) {
-        throw new RatisRequestFailedException(reply.getException());
+        String errorMsg =
+            String.format(
+                "transferLeader for group %s to %s failed. This could be due to a timeout, "
+                    + "especially during heavy disk usage. Consider increasing the "
+                    + "'ratis_transfer_leader_timeout_ms' configuration property.",
+                groupId, newLeader);
+        throw new RatisRequestFailedException(errorMsg, reply.getException());
       }
     } catch (Exception e) {
-      throw new RatisRequestFailedException(e);
+      String errorMsg =
+          String.format(
+              "transferLeader for group %s to %s failed. This could be due to a timeout, "
+                  + "especially during initial startup. Consider increasing the "
+                  + "'ratis_rpc_transfer_leader_timeout_ms' configuration property.",
+              groupId, newLeader);
+      throw new RatisRequestFailedException(errorMsg, e);
     }
   }
 
@@ -720,7 +736,8 @@ class RatisConsensus implements IConsensus {
       return client
           .getRaftClient()
           .admin()
-          .transferLeadership(newLeader != null ? newLeader.getId() : null, 10000);
+          .transferLeadership(
+              newLeader != null ? newLeader.getId() : null, transferLeadershipTimeoutMs);
     }
   }
 

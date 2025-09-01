@@ -182,6 +182,10 @@ public class ConfigNodeDescriptor {
         properties.getProperty(
             "series_partition_executor_class", conf.getSeriesPartitionExecutorClass()));
 
+    conf.setDataPartitionAllocationStrategy(
+        properties.getProperty(
+            "data_partition_allocation_strategy", conf.getDataPartitionAllocationStrategy()));
+
     conf.setConfigNodeConsensusProtocolClass(
         properties.getProperty(
             "config_node_consensus_protocol_class", conf.getConfigNodeConsensusProtocolClass()));
@@ -317,12 +321,14 @@ public class ConfigNodeDescriptor {
     String leaderDistributionPolicy =
         properties.getProperty("leader_distribution_policy", conf.getLeaderDistributionPolicy());
     if (AbstractLeaderBalancer.GREEDY_POLICY.equals(leaderDistributionPolicy)
-        || AbstractLeaderBalancer.CFD_POLICY.equals(leaderDistributionPolicy)) {
+        || AbstractLeaderBalancer.CFD_POLICY.equals(leaderDistributionPolicy)
+        || AbstractLeaderBalancer.HASH_POLICY.equals(leaderDistributionPolicy)) {
       conf.setLeaderDistributionPolicy(leaderDistributionPolicy);
     } else {
       throw new IOException(
           String.format(
-              "Unknown leader_distribution_policy: %s, " + "please set to \"GREEDY\" or \"CFD\"",
+              "Unknown leader_distribution_policy: %s, "
+                  + "please set to \"GREEDY\" or \"CFD\" or \"HASH\"",
               leaderDistributionPolicy));
     }
 
@@ -649,6 +655,12 @@ public class ConfigNodeDescriptor {
             properties.getProperty(
                 "ratis_first_election_timeout_max_ms",
                 String.valueOf(conf.getRatisFirstElectionTimeoutMaxMs()))));
+
+    conf.setRatisTransferLeaderTimeoutMs(
+        Integer.parseInt(
+            properties.getProperty(
+                "ratis_transfer_leader_timeout_ms",
+                String.valueOf(conf.getRatisTransferLeaderTimeoutMs()))));
 
     conf.setConfigNodeRatisLogMax(
         Long.parseLong(

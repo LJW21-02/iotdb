@@ -61,6 +61,7 @@ public class IoTDBClusterAuthorityRelationalIT {
   @Before
   public void setUp() throws Exception {
     // Init 1C1D environment
+    EnvFactory.getEnv().getConfig().getCommonConfig().setEnforceStrongPassword(false);
     EnvFactory.getEnv().initClusterEnvironment(1, 1);
   }
 
@@ -333,7 +334,7 @@ public class IoTDBClusterAuthorityRelationalIT {
     try (SyncConfigNodeIServiceClient client =
         (SyncConfigNodeIServiceClient) EnvFactory.getEnv().getLeaderConfigNodeConnection()) {
       cleanUserAndRole(client);
-      createUserORRoleAndCheck(client, "user1", true, "password");
+      createUserORRoleAndCheck(client, "user1", true, "password123456");
       createUserORRoleAndCheck(client, "role1", false, "");
       runAndCheck(
           client,
@@ -348,7 +349,6 @@ public class IoTDBClusterAuthorityRelationalIT {
               false));
       grantSysPrivilegeAndCheck(client, "user1", "role1", true, PrivilegeType.MANAGE_USER, false);
       grantSysPrivilegeAndCheck(client, "user1", "role1", true, PrivilegeType.MANAGE_ROLE, true);
-      grantSysPrivilegeAndCheck(client, "user1", "role1", false, PrivilegeType.MAINTAIN, true);
       grantPrivilegeAndCheck(
           client, "user1", "", true, new PrivilegeUnion("database", "table", PrivilegeType.SELECT));
       grantPrivilegeAndCheck(
@@ -379,7 +379,7 @@ public class IoTDBClusterAuthorityRelationalIT {
       //        "database2".*       create(with grant option);
 
       // check login
-      TLoginReq req = new TLoginReq("user1", "password");
+      TLoginReq req = new TLoginReq("user1", "password123456");
       expectSuccess(client.login(req));
 
       // check user has role.

@@ -84,6 +84,7 @@ public class IoTDBPipeSwitchStatusIT extends AbstractPipeDualTreeModelAutoIT {
       Assert.assertEquals(TSStatusCode.SUCCESS_STATUS.getStatusCode(), status.getCode());
 
       List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertTrue(
           showPipeResult.stream().anyMatch((o) -> o.id.equals("p1") && o.state.equals("RUNNING")));
       Assert.assertTrue(
@@ -99,6 +100,7 @@ public class IoTDBPipeSwitchStatusIT extends AbstractPipeDualTreeModelAutoIT {
           TSStatusCode.SUCCESS_STATUS.getStatusCode(), client.dropPipe("p3").getCode());
 
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertTrue(
           showPipeResult.stream().anyMatch((o) -> o.id.equals("p1") && o.state.equals("RUNNING")));
       Assert.assertTrue(
@@ -111,6 +113,7 @@ public class IoTDBPipeSwitchStatusIT extends AbstractPipeDualTreeModelAutoIT {
           TSStatusCode.SUCCESS_STATUS.getStatusCode(), client.dropPipe("p2").getCode());
 
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertTrue(
           showPipeResult.stream().anyMatch((o) -> o.id.equals("p1") && o.state.equals("STOPPED")));
       Assert.assertFalse(showPipeResult.stream().anyMatch((o) -> o.id.equals("p2")));
@@ -119,6 +122,7 @@ public class IoTDBPipeSwitchStatusIT extends AbstractPipeDualTreeModelAutoIT {
           TSStatusCode.SUCCESS_STATUS.getStatusCode(), client.dropPipe("p1").getCode());
 
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertFalse(showPipeResult.stream().anyMatch((o) -> o.id.equals("p1")));
     }
   }
@@ -149,6 +153,7 @@ public class IoTDBPipeSwitchStatusIT extends AbstractPipeDualTreeModelAutoIT {
       Assert.assertEquals(TSStatusCode.SUCCESS_STATUS.getStatusCode(), status.getCode());
 
       List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertTrue(
           showPipeResult.stream().anyMatch((o) -> o.id.equals("p1") && o.state.equals("RUNNING")));
 
@@ -160,17 +165,20 @@ public class IoTDBPipeSwitchStatusIT extends AbstractPipeDualTreeModelAutoIT {
       Assert.assertEquals(TSStatusCode.PIPE_ERROR.getStatusCode(), status.getCode());
 
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.stream().filter((o) -> o.id.equals("p1")).count());
 
       Assert.assertEquals(
           TSStatusCode.SUCCESS_STATUS.getStatusCode(), client.startPipe("p1").getCode());
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertTrue(
           showPipeResult.stream().anyMatch((o) -> o.id.equals("p1") && o.state.equals("RUNNING")));
 
       Assert.assertEquals(
           TSStatusCode.SUCCESS_STATUS.getStatusCode(), client.stopPipe("p1").getCode());
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertTrue(
           showPipeResult.stream().anyMatch((o) -> o.id.equals("p1") && o.state.equals("STOPPED")));
       Assert.assertEquals(1, showPipeResult.stream().filter((o) -> o.id.equals("p1")).count());
@@ -178,6 +186,7 @@ public class IoTDBPipeSwitchStatusIT extends AbstractPipeDualTreeModelAutoIT {
       Assert.assertEquals(
           TSStatusCode.SUCCESS_STATUS.getStatusCode(), client.stopPipe("p1").getCode());
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertTrue(
           showPipeResult.stream().anyMatch((o) -> o.id.equals("p1") && o.state.equals("STOPPED")));
       Assert.assertEquals(1, showPipeResult.stream().filter((o) -> o.id.equals("p1")).count());
@@ -194,7 +203,7 @@ public class IoTDBPipeSwitchStatusIT extends AbstractPipeDualTreeModelAutoIT {
     try (final SyncConfigNodeIServiceClient client =
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       if (!TestUtils.tryExecuteNonQueryWithRetry(
-          senderEnv, "insert into root.db.d1(time, s1) values (1, 1)")) {
+          senderEnv, "insert into root.db.d1(time, s1) values (1, 1)", null)) {
         return;
       }
 
@@ -216,16 +225,18 @@ public class IoTDBPipeSwitchStatusIT extends AbstractPipeDualTreeModelAutoIT {
       Assert.assertEquals(
           TSStatusCode.SUCCESS_STATUS.getStatusCode(), client.startPipe("p1").getCode());
       List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertTrue(
           showPipeResult.stream().anyMatch((o) -> o.id.equals("p1") && o.state.equals("RUNNING")));
 
-      if (!TestUtils.tryExecuteNonQueryWithRetry(senderEnv, "drop database root.**")) {
+      if (!TestUtils.tryExecuteNonQueryWithRetry(senderEnv, "drop database root.**", null)) {
         return;
       }
 
       Assert.assertEquals(
           TSStatusCode.SUCCESS_STATUS.getStatusCode(), client.dropPipe("p1").getCode());
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(
           0,
           showPipeResult.stream()
@@ -239,6 +250,7 @@ public class IoTDBPipeSwitchStatusIT extends AbstractPipeDualTreeModelAutoIT {
                   .setProcessorAttributes(processorAttributes));
       Assert.assertEquals(TSStatusCode.SUCCESS_STATUS.getStatusCode(), status.getCode());
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.stream().filter((o) -> o.id.equals("p1")).count());
     }
   }
@@ -276,12 +288,14 @@ public class IoTDBPipeSwitchStatusIT extends AbstractPipeDualTreeModelAutoIT {
       Assert.assertEquals(
           TSStatusCode.PIPE_NOT_EXIST_ERROR.getStatusCode(), client.startPipe("*").getCode());
       List<TShowPipeInfo> showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertTrue(
           showPipeResult.stream().anyMatch((o) -> o.id.equals("p1") && o.state.equals("RUNNING")));
 
       Assert.assertEquals(
           TSStatusCode.SUCCESS_STATUS.getStatusCode(), client.startPipe("p1").getCode());
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertTrue(
           showPipeResult.stream().anyMatch((o) -> o.id.equals("p1") && o.state.equals("RUNNING")));
 
@@ -294,12 +308,14 @@ public class IoTDBPipeSwitchStatusIT extends AbstractPipeDualTreeModelAutoIT {
       Assert.assertEquals(
           TSStatusCode.PIPE_NOT_EXIST_ERROR.getStatusCode(), client.stopPipe("*").getCode());
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertTrue(
           showPipeResult.stream().anyMatch((o) -> o.id.equals("p1") && o.state.equals("RUNNING")));
 
       Assert.assertEquals(
           TSStatusCode.SUCCESS_STATUS.getStatusCode(), client.stopPipe("p1").getCode());
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertTrue(
           showPipeResult.stream().anyMatch((o) -> o.id.equals("p1") && o.state.equals("STOPPED")));
 
@@ -312,12 +328,14 @@ public class IoTDBPipeSwitchStatusIT extends AbstractPipeDualTreeModelAutoIT {
       Assert.assertEquals(
           TSStatusCode.PIPE_NOT_EXIST_ERROR.getStatusCode(), client.dropPipe("*").getCode());
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertTrue(
           showPipeResult.stream().anyMatch((o) -> o.id.equals("p1") && o.state.equals("STOPPED")));
 
       Assert.assertEquals(
           TSStatusCode.SUCCESS_STATUS.getStatusCode(), client.dropPipe("p1").getCode());
       showPipeResult = client.showPipe(new TShowPipeReq()).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertFalse(showPipeResult.stream().anyMatch((o) -> o.id.equals("p1")));
     }
   }

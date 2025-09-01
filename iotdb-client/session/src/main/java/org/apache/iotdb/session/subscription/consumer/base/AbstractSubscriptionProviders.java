@@ -23,6 +23,7 @@ import org.apache.iotdb.common.rpc.thrift.TEndPoint;
 import org.apache.iotdb.rpc.IoTDBConnectionException;
 import org.apache.iotdb.rpc.subscription.exception.SubscriptionConnectionException;
 import org.apache.iotdb.rpc.subscription.exception.SubscriptionException;
+import org.apache.iotdb.rpc.subscription.payload.response.PipeSubscribeHeartbeatResp;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -93,7 +94,7 @@ final class AbstractSubscriptionProviders {
 
       final Map<Integer, TEndPoint> allEndPoints;
       try {
-        allEndPoints = defaultProvider.getSessionConnection().fetchAllEndPoints();
+        allEndPoints = defaultProvider.heartbeat().getEndPoints();
       } catch (final Exception e) {
         LOGGER.warn("Failed to fetch all endpoints from {}, will retry later...", endPoint, e);
         break; // retry later
@@ -238,7 +239,17 @@ final class AbstractSubscriptionProviders {
   private void heartbeatInternal(final AbstractSubscriptionConsumer consumer) {
     for (final AbstractSubscriptionProvider provider : getAllProviders()) {
       try {
-        consumer.subscribedTopics = provider.heartbeat();
+        final PipeSubscribeHeartbeatResp resp = provider.heartbeat();
+        // update subscribed topics
+        consumer.subscribedTopics = resp.getTopics();
+        // unsubscribe completed topics
+        for (final String topicName : resp.getTopicNamesToUnsubscribe()) {
+          LOGGER.info(
+              "Termination occurred when SubscriptionConsumer {} polling topics, unsubscribe topic {} automatically",
+              consumer.coreReportMessage(),
+              topicName);
+          consumer.unsubscribe(topicName);
+        }
         provider.setAvailable();
       } catch (final Exception e) {
         LOGGER.warn(
@@ -301,7 +312,7 @@ final class AbstractSubscriptionProviders {
       } else {
         // existing provider
         try {
-          consumer.subscribedTopics = provider.heartbeat();
+          consumer.subscribedTopics = provider.heartbeat().getTopics();
           provider.setAvailable();
         } catch (final Exception e) {
           LOGGER.warn(

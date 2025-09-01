@@ -76,13 +76,6 @@ public class MppSharedCommonConfig implements CommonConfig {
   }
 
   @Override
-  public CommonConfig setEncryptFlag(boolean encryptFlag) {
-    cnConfig.setProperty("encrypt_flag", String.valueOf(encryptFlag));
-    dnConfig.setProperty("encrypt_flag", String.valueOf(encryptFlag));
-    return this;
-  }
-
-  @Override
   public CommonConfig setEncryptType(String encryptType) {
     cnConfig.setProperty("encrypt_type", encryptType);
     dnConfig.setProperty("encrypt_type", encryptType);
@@ -90,9 +83,9 @@ public class MppSharedCommonConfig implements CommonConfig {
   }
 
   @Override
-  public CommonConfig setEncryptKeyPath(String encryptKeyPath) {
-    cnConfig.setProperty("encrypt_key_path", encryptKeyPath);
-    dnConfig.setProperty("encrypt_key_path", encryptKeyPath);
+  public CommonConfig setEnableGrantOption(boolean enableGrantOption) {
+    cnConfig.setEnableGrantOption(enableGrantOption);
+    dnConfig.setEnableGrantOption(enableGrantOption);
     return this;
   }
 
@@ -390,6 +383,12 @@ public class MppSharedCommonConfig implements CommonConfig {
   }
 
   @Override
+  public CommonConfig setDataPartitionAllocationStrategy(String dataPartitionAllocationStrategy) {
+    cnConfig.setDataPartitionAllocationStrategy(dataPartitionAllocationStrategy);
+    return this;
+  }
+
+  @Override
   public CommonConfig setSeriesPartitionExecutorClass(String seriesPartitionExecutorClass) {
     cnConfig.setSeriesPartitionExecutorClass(seriesPartitionExecutorClass);
     dnConfig.setSeriesPartitionExecutorClass(seriesPartitionExecutorClass);
@@ -463,6 +462,20 @@ public class MppSharedCommonConfig implements CommonConfig {
   public CommonConfig setSchemaRegionPerDataNode(double schemaRegionPerDataNode) {
     dnConfig.setSchemaRegionPerDataNode(schemaRegionPerDataNode);
     cnConfig.setSchemaRegionPerDataNode(schemaRegionPerDataNode);
+    return this;
+  }
+
+  @Override
+  public CommonConfig setPipeMemoryManagementEnabled(boolean pipeMemoryManagementEnabled) {
+    dnConfig.setPipeMemoryManagementEnabled(pipeMemoryManagementEnabled);
+    cnConfig.setPipeMemoryManagementEnabled(pipeMemoryManagementEnabled);
+    return this;
+  }
+
+  @Override
+  public CommonConfig setIsPipeEnableMemoryCheck(boolean isPipeEnableMemoryCheck) {
+    dnConfig.setIsPipeEnableMemoryCheck(isPipeEnableMemoryCheck);
+    cnConfig.setIsPipeEnableMemoryCheck(isPipeEnableMemoryCheck);
     return this;
   }
 
@@ -542,9 +555,55 @@ public class MppSharedCommonConfig implements CommonConfig {
   }
 
   @Override
+  public CommonConfig setDataNodeMemoryProportion(String dataNodeMemoryProportion) {
+    dnConfig.setDataNodeMemoryProportion(dataNodeMemoryProportion);
+    cnConfig.setDataNodeMemoryProportion(dataNodeMemoryProportion);
+    return this;
+  }
+
+  @Override
+  public CommonConfig setSubscriptionPrefetchTsFileBatchMaxDelayInMs(
+      int subscriptionPrefetchTsFileBatchMaxDelayInMs) {
+    dnConfig.setSubscriptionPrefetchTsFileBatchMaxDelayInMs(
+        subscriptionPrefetchTsFileBatchMaxDelayInMs);
+    cnConfig.setSubscriptionPrefetchTsFileBatchMaxDelayInMs(
+        subscriptionPrefetchTsFileBatchMaxDelayInMs);
+    return this;
+  }
+
+  @Override
+  public CommonConfig setSubscriptionPrefetchTsFileBatchMaxSizeInBytes(
+      int subscriptionPrefetchTsFileBatchMaxSizeInBytes) {
+    dnConfig.setSubscriptionPrefetchTsFileBatchMaxSizeInBytes(
+        subscriptionPrefetchTsFileBatchMaxSizeInBytes);
+    cnConfig.setSubscriptionPrefetchTsFileBatchMaxSizeInBytes(
+        subscriptionPrefetchTsFileBatchMaxSizeInBytes);
+    return this;
+  }
+
+  public CommonConfig setSubscriptionEnabled(boolean subscriptionEnabled) {
+    dnConfig.setSubscriptionEnabled(subscriptionEnabled);
+    cnConfig.setSubscriptionEnabled(subscriptionEnabled);
+    return this;
+  }
+
+  @Override
   public CommonConfig setDefaultStorageGroupLevel(int defaultStorageGroupLevel) {
     dnConfig.setDefaultStorageGroupLevel(defaultStorageGroupLevel);
     cnConfig.setDefaultStorageGroupLevel(defaultStorageGroupLevel);
+    return this;
+  }
+
+  @Override
+  public CommonConfig setEnforceStrongPassword(boolean enforceStrongPassword) {
+    dnConfig.setEnforceStrongPassword(enforceStrongPassword);
+    cnConfig.setEnforceStrongPassword(enforceStrongPassword);
+    return this;
+  }
+
+  public CommonConfig setDatanodeMemoryProportion(String datanodeMemoryProportion) {
+    dnConfig.setDatanodeMemoryProportion(datanodeMemoryProportion);
+    cnConfig.setDatanodeMemoryProportion(datanodeMemoryProportion);
     return this;
   }
 }

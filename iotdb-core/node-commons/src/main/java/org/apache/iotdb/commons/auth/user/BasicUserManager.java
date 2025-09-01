@@ -107,7 +107,12 @@ public abstract class BasicUserManager extends BasicRoleManager {
   public boolean createUser(
       String username, String password, boolean validCheck, boolean enableEncrypt)
       throws AuthException {
-    if (validCheck) {
+    if (validCheck && !CommonDescriptor.getInstance().getConfig().getAdminName().equals(username)) {
+      if (username.equals(password)
+          && CommonDescriptor.getInstance().getConfig().isEnforceStrongPassword()) {
+        throw new AuthException(
+            TSStatusCode.ILLEGAL_PASSWORD, "Password cannot be the same as user name");
+      }
       AuthUtils.validateUsername(username);
       if (enableEncrypt) {
         AuthUtils.validatePassword(password);
@@ -128,12 +133,15 @@ public abstract class BasicUserManager extends BasicRoleManager {
     }
   }
 
-  public boolean updateUserPassword(String username, String newPassword) throws AuthException {
-    try {
+  public boolean updateUserPassword(String username, String newPassword, boolean bypassValidate)
+      throws AuthException {
+    if (!bypassValidate) {
+      if (CommonDescriptor.getInstance().getConfig().isEnforceStrongPassword()
+          && username.equals(newPassword)) {
+        throw new AuthException(
+            TSStatusCode.ILLEGAL_PASSWORD, "Password cannot be the same as user name");
+      }
       AuthUtils.validatePassword(newPassword);
-    } catch (AuthException e) {
-      LOGGER.debug("An illegal password detected ", e);
-      return false;
     }
 
     lock.writeLock(username);
@@ -150,7 +158,7 @@ public abstract class BasicUserManager extends BasicRoleManager {
     }
   }
 
-  public boolean grantRoleToUser(String roleName, String username) throws AuthException {
+  public void grantRoleToUser(String roleName, String username) throws AuthException {
     lock.writeLock(username);
     try {
       User user = this.getEntity(username);
@@ -158,17 +166,13 @@ public abstract class BasicUserManager extends BasicRoleManager {
         throw new AuthException(
             getEntityNotExistErrorCode(), String.format(getNoSuchEntityError(), username));
       }
-      if (user.hasRole(roleName)) {
-        return false;
-      }
       user.getRoleSet().add(roleName);
-      return true;
     } finally {
       lock.writeUnlock(username);
     }
   }
 
-  public boolean revokeRoleFromUser(String roleName, String username) throws AuthException {
+  public void revokeRoleFromUser(String roleName, String username) throws AuthException {
     lock.writeLock(username);
     try {
       User user = this.getEntity(username);
@@ -176,11 +180,7 @@ public abstract class BasicUserManager extends BasicRoleManager {
         throw new AuthException(
             getEntityNotExistErrorCode(), String.format(getNoSuchEntityError(), username));
       }
-      if (!user.hasRole(roleName)) {
-        return false;
-      }
       user.getRoleSet().remove(roleName);
-      return true;
     } finally {
       lock.writeUnlock(username);
     }

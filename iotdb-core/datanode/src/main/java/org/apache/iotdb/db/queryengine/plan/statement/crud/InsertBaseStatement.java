@@ -31,17 +31,23 @@ import org.apache.iotdb.db.exception.metadata.DuplicateInsertException;
 import org.apache.iotdb.db.exception.metadata.PathNotExistException;
 import org.apache.iotdb.db.exception.query.QueryProcessException;
 import org.apache.iotdb.db.exception.sql.SemanticException;
+import org.apache.iotdb.db.pipe.resource.memory.InsertNodeMemoryEstimator;
 import org.apache.iotdb.db.queryengine.common.MPPQueryContext;
 import org.apache.iotdb.db.queryengine.plan.analyze.schema.ISchemaValidation;
+import org.apache.iotdb.db.queryengine.plan.planner.plan.parameter.InputLocation;
 import org.apache.iotdb.db.queryengine.plan.relational.metadata.ColumnSchema;
 import org.apache.iotdb.db.queryengine.plan.relational.type.InternalTypeManager;
 import org.apache.iotdb.db.queryengine.plan.statement.Statement;
+import org.apache.iotdb.db.schemaengine.schemaregion.attribute.update.UpdateDetailContainer;
 import org.apache.iotdb.db.utils.CommonUtils;
 import org.apache.iotdb.rpc.TSStatusCode;
 
 import org.apache.tsfile.annotations.TableModel;
 import org.apache.tsfile.enums.TSDataType;
+import org.apache.tsfile.read.common.type.Type;
+import org.apache.tsfile.utils.Accountable;
 import org.apache.tsfile.utils.Pair;
+import org.apache.tsfile.utils.RamUsageEstimator;
 import org.apache.tsfile.write.schema.MeasurementSchema;
 
 import java.util.ArrayList;
@@ -51,11 +57,13 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-public abstract class InsertBaseStatement extends Statement {
+public abstract class InsertBaseStatement extends Statement implements Accountable {
 
   /**
    * if use id table, this filed is id form of device path <br>
@@ -72,11 +80,14 @@ public abstract class InsertBaseStatement extends Statement {
   // get from client
   protected TSDataType[] dataTypes;
 
+  protected Type[] typeConvertors;
+  protected InputLocation[] inputLocations;
+
   /** index of failed measurements -> info including measurement, data type and value */
   protected Map<Integer, FailedMeasurementInfo> failedMeasurementIndex2Info;
 
   protected TsTableColumnCategory[] columnCategories;
-  protected List<Integer> idColumnIndices;
+  protected List<Integer> tagColumnIndices;
   protected List<Integer> attrColumnIndices;
   protected boolean writeToTable = false;
 
@@ -100,6 +111,8 @@ public abstract class InsertBaseStatement extends Statement {
   protected int recordedEndOfLogicalViewSchemaList = 0;
 
   @TableModel protected String databaseName;
+
+  protected long ramBytesUsed = Long.MIN_VALUE;
 
   // endregion
 
@@ -164,6 +177,14 @@ public abstract class InsertBaseStatement extends Statement {
     this.dataTypes[i] = dataType;
   }
 
+  public void setTypeConvertors(Type[] typeConvertors) {
+    this.typeConvertors = typeConvertors;
+  }
+
+  public void setInputLocations(InputLocation[] inputLocations) {
+    this.inputLocations = inputLocations;
+  }
+
   /** Returns true when this statement is empty and no need to write into the server */
   public abstract boolean isEmpty();
 
@@ -179,7 +200,7 @@ public abstract class InsertBaseStatement extends Statement {
     }
     List<PartialPath> checkedPaths = getPaths().stream().distinct().collect(Collectors.toList());
     return AuthorityChecker.getTSStatus(
-        AuthorityChecker.checkFullPathListPermission(
+        AuthorityChecker.checkFullPathOrPatternListPermission(
             userName, checkedPaths, PrivilegeType.WRITE_DATA),
         checkedPaths,
         PrivilegeType.WRITE_DATA);
@@ -298,19 +319,19 @@ public abstract class InsertBaseStatement extends Statement {
       columnCategories = new TsTableColumnCategory[measurements.length];
     }
     this.columnCategories[i] = columnCategory;
-    this.idColumnIndices = null;
+    this.tagColumnIndices = null;
   }
 
-  public List<Integer> getIdColumnIndices() {
-    if (idColumnIndices == null && columnCategories != null) {
-      idColumnIndices = new ArrayList<>();
+  public List<Integer> getTagColumnIndices() {
+    if (tagColumnIndices == null && columnCategories != null) {
+      tagColumnIndices = new ArrayList<>();
       for (int i = 0; i < columnCategories.length; i++) {
         if (columnCategories[i].equals(TsTableColumnCategory.TAG)) {
-          idColumnIndices.add(i);
+          tagColumnIndices.add(i);
         }
       }
     }
-    return idColumnIndices;
+    return tagColumnIndices;
   }
 
   public List<Integer> getAttrColumnIndices() {
@@ -367,6 +388,55 @@ public abstract class InsertBaseStatement extends Statement {
                 })
             .collect(Collectors.toList());
   }
+
+  @TableModel
+  public void removeAttributeColumns() {
+    if (columnCategories == null) {
+      return;
+    }
+
+    List<Integer> columnsToKeep = new ArrayList<>();
+    for (int i = 0; i < columnCategories.length; i++) {
+      if (!columnCategories[i].equals(TsTableColumnCategory.ATTRIBUTE)) {
+        columnsToKeep.add(i);
+      }
+    }
+
+    if (columnsToKeep.size() == columnCategories.length) {
+      return;
+    }
+
+    if (failedMeasurementIndex2Info != null) {
+      failedMeasurementIndex2Info =
+          failedMeasurementIndex2Info.entrySet().stream()
+              .collect(Collectors.toMap(e -> columnsToKeep.indexOf(e.getKey()), Entry::getValue));
+    }
+
+    if (measurementSchemas != null) {
+      measurementSchemas =
+          columnsToKeep.stream().map(i -> measurementSchemas[i]).toArray(MeasurementSchema[]::new);
+    }
+    if (measurements != null) {
+      measurements = columnsToKeep.stream().map(i -> measurements[i]).toArray(String[]::new);
+    }
+    if (dataTypes != null) {
+      dataTypes = columnsToKeep.stream().map(i -> dataTypes[i]).toArray(TSDataType[]::new);
+    }
+    if (columnCategories != null) {
+      columnCategories =
+          columnsToKeep.stream()
+              .map(i -> columnCategories[i])
+              .toArray(TsTableColumnCategory[]::new);
+    }
+
+    subRemoveAttributeColumns(columnsToKeep);
+
+    // to reconstruct indices
+    tagColumnIndices = null;
+    attrColumnIndices = null;
+  }
+
+  protected abstract void subRemoveAttributeColumns(List<Integer> columnsToKeep);
 
   public static class FailedMeasurementInfo {
     protected String measurement;
@@ -531,7 +601,7 @@ public abstract class InsertBaseStatement extends Statement {
       System.arraycopy(
           columnCategories, pos, tmpCategories, pos + 1, columnCategories.length - pos);
       columnCategories = tmpCategories;
-      idColumnIndices = null;
+      tagColumnIndices = null;
     }
   }
 
@@ -550,7 +620,13 @@ public abstract class InsertBaseStatement extends Statement {
     if (columnCategories != null) {
       CommonUtils.swapArray(columnCategories, src, target);
     }
-    idColumnIndices = null;
+    if (typeConvertors != null) {
+      CommonUtils.swapArray(typeConvertors, src, target);
+    }
+    if (inputLocations != null) {
+      CommonUtils.swapArray(inputLocations, src, target);
+    }
+    tagColumnIndices = null;
   }
 
   public boolean isWriteToTable() {
@@ -618,4 +694,41 @@ public abstract class InsertBaseStatement extends Statement {
   public boolean isForceTypeConversion() {
     return false;
   }
+
+  @Override
+  public long ramBytesUsed() {
+    if (ramBytesUsed > 0) {
+      return ramBytesUsed;
+    }
+    ramBytesUsed =
+        InsertNodeMemoryEstimator.sizeOfPartialPath(devicePath)
+            + InsertNodeMemoryEstimator.sizeOfMeasurementSchemas(measurementSchemas)
+            + InsertNodeMemoryEstimator.sizeOfStringArray(measurements)
+            + RamUsageEstimator.shallowSizeOf(dataTypes)
+            + RamUsageEstimator.shallowSizeOf(columnCategories)
+            // We assume that the integers are all cached by JVM
+            + shallowSizeOfList(tagColumnIndices)
+            + shallowSizeOfList(attrColumnIndices)
+            + shallowSizeOfList(logicalViewSchemaList)
+            + (Objects.nonNull(logicalViewSchemaList)
+                ? logicalViewSchemaList.stream()
+                    .mapToLong(LogicalViewSchema::ramBytesUsed)
+                    .reduce(0L, Long::sum)
+                : 0L)
+            + shallowSizeOfList(indexOfSourcePathsOfLogicalViews)
+            + RamUsageEstimator.sizeOf(databaseName)
+            + calculateBytesUsed();
+    return ramBytesUsed;
+  }
+
+  private long shallowSizeOfList(List<?> list) {
+    return Objects.nonNull(list)
+        ? UpdateDetailContainer.LIST_SIZE
+            + RamUsageEstimator.alignObjectSize(
+                RamUsageEstimator.NUM_BYTES_ARRAY_HEADER
+                    + (long) RamUsageEstimator.NUM_BYTES_OBJECT_REF * list.size())
+        : 0L;
+  }
+
+  protected abstract long calculateBytesUsed();
 }

@@ -43,7 +43,7 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;
-import java.time.format.DateTimeParseException;
+import java.time.format.ResolverStyle;
 import java.time.format.SignStyle;
 import java.time.temporal.ChronoField;
 import java.util.Calendar;
@@ -59,12 +59,11 @@ public class DateTimeUtils {
     // forbidding instantiation
   }
 
-  public static final String TIMESTAMP_PRECISION =
-      CommonDescriptor.getInstance().getConfig().getTimestampPrecision();
+  private static String timestampPrecision;
 
   public static long correctPrecision(long millis) {
     try {
-      switch (TIMESTAMP_PRECISION) {
+      switch (timestampPrecision) {
         case "us":
         case "microsecond":
           return Math.multiplyExact(millis, 1_000L);
@@ -80,30 +79,68 @@ public class DateTimeUtils {
       throw new IoTDBRuntimeException(
           String.format(
               "Timestamp overflow, Millisecond: %s , Timestamp precision: %s",
-              millis, TIMESTAMP_PRECISION),
+              millis, timestampPrecision),
           NUMERIC_VALUE_OUT_OF_RANGE.getStatusCode(),
           true);
     }
   }
 
-  private static Function<Long, Long> CAST_TIMESTAMP_TO_MS;
+  private static Function<Long, Long> castTimestampToMs;
+  private static Function<Long, Long> extractTimestampMsPart;
+  private static Function<Long, Long> extractTimestampUsPart;
+  private static Function<Long, Long> extractTimestampNsPart;
 
-  static {
-    switch (CommonDescriptor.getInstance().getConfig().getTimestampPrecision()) {
+  private static void updateFunction() {
+    switch (timestampPrecision) {
       case "us":
       case "microsecond":
-        CAST_TIMESTAMP_TO_MS = timestamp -> timestamp / 1000;
+        castTimestampToMs = timestamp -> timestamp / 1000;
+        extractTimestampMsPart = timestamp -> Math.floorMod(timestamp, 1000_000L) / 1000;
+        extractTimestampUsPart = timestamp -> Math.floorMod(timestamp, 1000L);
+        extractTimestampNsPart = timestamp -> 0L;
         break;
       case "ns":
       case "nanosecond":
-        CAST_TIMESTAMP_TO_MS = timestamp -> timestamp / 1000000;
+        castTimestampToMs = timestamp -> timestamp / 1000000;
+        extractTimestampMsPart = timestamp -> Math.floorMod(timestamp, 1000_000_000L) / 1000_000;
+        extractTimestampUsPart = timestamp -> Math.floorMod(timestamp, 1000_000L) / 1000;
+        extractTimestampNsPart = timestamp -> Math.floorMod(timestamp, 1000L);
         break;
       case "ms":
       case "millisecond":
       default:
-        CAST_TIMESTAMP_TO_MS = timestamp -> timestamp;
+        castTimestampToMs = timestamp -> timestamp;
+        extractTimestampMsPart = timestamp -> Math.floorMod(timestamp, 1000L);
+        extractTimestampUsPart = timestamp -> 0L;
+        extractTimestampNsPart = timestamp -> 0L;
         break;
     }
+  }
+
+  public static Function<Long, Long> getExtractTimestampMsPartFunction() {
+    if (extractTimestampMsPart == null) {
+      throw new IllegalArgumentException("ExtractTimestampMsPart is null");
+    }
+    return extractTimestampMsPart;
+  }
+
+  public static Function<Long, Long> getExtractTimestampUsPartFunction() {
+    if (extractTimestampUsPart == null) {
+      throw new IllegalArgumentException("ExtractTimestampUsPart is null");
+    }
+    return extractTimestampUsPart;
+  }
+
+  public static Function<Long, Long> getExtractTimestampNsPartFunction() {
+    if (extractTimestampNsPart == null) {
+      throw new IllegalArgumentException("ExtractTimestampNsPart is null");
+    }
+    return extractTimestampNsPart;
+  }
+
+  public static void initTimestampPrecision() {
+    timestampPrecision = CommonDescriptor.getInstance().getConfig().getTimestampPrecision();
+    updateFunction();
   }
 
   private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
@@ -507,7 +544,8 @@ public class DateTimeUtils {
 
           /** such as '2011.12.03 10:15:30+01:00' or '2011.12.03 10:15:30.123456789+01:00'. */
           .appendOptional(ISO_OFFSET_DATE_TIME_WITH_DOT_WITH_SPACE_NS)
-          .toFormatter();
+          .toFormatter()
+          .withResolverStyle(ResolverStyle.STRICT);
 
   public static long convertTimestampOrDatetimeStrToLongWithDefaultZone(String timeStr) {
     try {
@@ -531,27 +569,23 @@ public class DateTimeUtils {
   }
 
   public static long getInstantWithPrecision(String str, String timestampPrecision) {
-    try {
-      ZonedDateTime zonedDateTime = ZonedDateTime.parse(str, formatter);
-      Instant instant = zonedDateTime.toInstant();
-      if ("us".equals(timestampPrecision) || "microsecond".equals(timestampPrecision)) {
-        if (instant.getEpochSecond() < 0 && instant.getNano() > 0) {
-          // adjustment can reduce the loss of the division
-          long millis = Math.multiplyExact(instant.getEpochSecond() + 1, 1000_000L);
-          long adjustment = instant.getNano() / 1000 - 1L;
-          return Math.addExact(millis, adjustment);
-        } else {
-          long millis = Math.multiplyExact(instant.getEpochSecond(), 1000_000L);
-          return Math.addExact(millis, instant.getNano() / 1000);
-        }
-      } else if ("ns".equals(timestampPrecision) || "nanosecond".equals(timestampPrecision)) {
-        long millis = Math.multiplyExact(instant.getEpochSecond(), 1000_000_000L);
-        return Math.addExact(millis, instant.getNano());
+    ZonedDateTime zonedDateTime = ZonedDateTime.parse(str, formatter);
+    Instant instant = zonedDateTime.toInstant();
+    if ("us".equals(timestampPrecision) || "microsecond".equals(timestampPrecision)) {
+      if (instant.getEpochSecond() < 0 && instant.getNano() > 0) {
+        // adjustment can reduce the loss of the division
+        long millis = Math.multiplyExact(instant.getEpochSecond() + 1, 1000_000L);
+        long adjustment = instant.getNano() / 1000 - 1L;
+        return Math.addExact(millis, adjustment);
+      } else {
+        long millis = Math.multiplyExact(instant.getEpochSecond(), 1000_000L);
+        return Math.addExact(millis, instant.getNano() / 1000);
       }
-      return instant.toEpochMilli();
-    } catch (DateTimeParseException e) {
-      throw new RuntimeException(e.getMessage());
+    } else if ("ns".equals(timestampPrecision) || "nanosecond".equals(timestampPrecision)) {
+      long millis = Math.multiplyExact(instant.getEpochSecond(), 1000_000_000L);
+      return Math.addExact(millis, instant.getNano());
     }
+    return instant.toEpochMilli();
   }
 
   /** convert date time string to millisecond, microsecond or nanosecond. */
@@ -778,12 +812,12 @@ public class DateTimeUtils {
   }
 
   public static LocalDate convertToLocalDate(long timestamp, ZoneId zoneId) {
-    timestamp = CAST_TIMESTAMP_TO_MS.apply(timestamp);
+    timestamp = castTimestampToMs.apply(timestamp);
     return Instant.ofEpochMilli(timestamp).atZone(zoneId).toLocalDate();
   }
 
   public static ZonedDateTime convertToZonedDateTime(long timestamp, ZoneId zoneId) {
-    timestamp = CAST_TIMESTAMP_TO_MS.apply(timestamp);
+    timestamp = castTimestampToMs.apply(timestamp);
     return ZonedDateTime.ofInstant(Instant.ofEpochMilli(timestamp), zoneId);
   }
 
@@ -915,7 +949,7 @@ public class DateTimeUtils {
     parser1.getInterpreter().setPredictionMode(PredictionMode.SLL);
     parser1.removeErrorListeners();
     parser1.addErrorListener(SqlParseError.INSTANCE);
-    return astVisitor.parseDateExpression(parser1.dateExpression(), TIMESTAMP_PRECISION);
+    return astVisitor.parseDateExpression(parser1.dateExpression(), timestampPrecision);
   }
 
   public static Integer parseDateExpressionToInt(String dateExpression) {

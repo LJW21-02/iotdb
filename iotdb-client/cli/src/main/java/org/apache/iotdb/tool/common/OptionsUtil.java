@@ -56,19 +56,7 @@ public class OptionsUtil extends Constants {
     return options;
   }
 
-  public static Options createCommonOptions() {
-    Options options = new Options();
-
-    Option opFileType =
-        Option.builder(FILE_TYPE_ARGS)
-            .longOpt(FILE_TYPE_NAME)
-            .argName(FILE_TYPE_ARGS_NAME)
-            .required()
-            .hasArg()
-            .desc(isImport ? FILE_TYPE_DESC_IMPORT : FILE_TYPE_DESC_EXPORT)
-            .build();
-    options.addOption(opFileType);
-
+  public static Options createCommonOptions(Options options) {
     Option opSqlDialect =
         Option.builder(SQL_DIALECT_ARGS)
             .longOpt(SQL_DIALECT_ARGS)
@@ -118,28 +106,38 @@ public class OptionsUtil extends Constants {
     return options;
   }
 
+  public static Options createImportCommonOptions() {
+    Options options = new Options();
+
+    Option opFileType =
+        Option.builder(FILE_TYPE_ARGS)
+            .longOpt(FILE_TYPE_NAME)
+            .argName(FILE_TYPE_ARGS_NAME)
+            .required()
+            .hasArg()
+            .desc(isImport ? FILE_TYPE_DESC_IMPORT : FILE_TYPE_DESC_EXPORT)
+            .build();
+    options.addOption(opFileType);
+
+    return createCommonOptions(options);
+  }
+
   public static Options createTreeImportCommonOptions() {
-    return createCommonOptions();
+    return createImportCommonOptions();
   }
 
   public static Options createTableImportCommonOptions() {
-    Options options = createCommonOptions();
+    Options options = createImportCommonOptions();
 
     Option opDatabase =
-        Option.builder(DB_ARGS)
-            .longOpt(DB_NAME)
-            .argName(DB_ARGS)
-            .hasArg()
-            .required()
-            .desc(DB_DESC)
-            .build();
+        Option.builder(DB_ARGS).longOpt(DB_NAME).argName(DB_ARGS).hasArg().desc(DB_DESC).build();
     options.addOption(opDatabase);
 
     return options;
   }
 
-  public static Options createTreeExportCommonOptions() {
-    Options options = createCommonOptions();
+  public static Options createExportCommonOptions() {
+    Options options = createImportCommonOptions();
 
     Option opFile =
         Option.builder(TARGET_DIR_ARGS)
@@ -177,48 +175,25 @@ public class OptionsUtil extends Constants {
             .desc(TIMEOUT_DESC)
             .build();
     options.addOption(opTimeOut);
+
+    Option opRpcMaxFrameSize =
+        Option.builder(RPC_MAX_FRAME_SIZE_ARGS)
+            .longOpt(RPC_MAX_FRAME_SIZE_NAME)
+            .argName(RPC_MAX_FRAME_SIZE_NAME)
+            .hasArg()
+            .desc(RPC_MAX_FRAME_SIZE_DESC)
+            .build();
+    options.addOption(opRpcMaxFrameSize);
+
     return options;
   }
 
+  public static Options createTreeExportCommonOptions() {
+    return createExportCommonOptions();
+  }
+
   public static Options createTableExportCommonOptions() {
-    final Options options = createCommonOptions();
-
-    Option opFile =
-        Option.builder(TARGET_DIR_ARGS)
-            .required()
-            .longOpt(TARGET_DIR_NAME)
-            .argName(TARGET_DIR_ARGS_NAME)
-            .hasArg()
-            .desc(TARGET_DIR_DESC)
-            .build();
-    options.addOption(opFile);
-
-    Option opOnSuccess =
-        Option.builder(TARGET_FILE_ARGS)
-            .longOpt(TARGET_FILE_NAME)
-            .argName(TARGET_FILE_NAME)
-            .hasArg()
-            .desc(TARGET_FILE_DESC)
-            .build();
-    options.addOption(opOnSuccess);
-
-    Option opQuery =
-        Option.builder(QUERY_COMMAND_ARGS)
-            .longOpt(QUERY_COMMAND_NAME)
-            .argName(QUERY_COMMAND_ARGS_NAME)
-            .hasArg()
-            .desc(QUERY_COMMAND_DESC)
-            .build();
-    options.addOption(opQuery);
-
-    Option opTimeOut =
-        Option.builder(TIMEOUT_ARGS)
-            .longOpt(TIMEOUT_NAME)
-            .argName(TIMEOUT_NAME)
-            .hasArg()
-            .desc(TIMEOUT_DESC)
-            .build();
-    options.addOption(opTimeOut);
+    Options options = createExportCommonOptions();
 
     Option opDatabase =
         Option.builder(DB_ARGS)
@@ -319,7 +294,6 @@ public class OptionsUtil extends Constants {
             .longOpt(TABLE_ARGS)
             .argName(TABLE_ARGS)
             .hasArg()
-            .required()
             .desc(TABLE_DESC_EXPORT)
             .build();
     options.addOption(opTable);
@@ -362,7 +336,6 @@ public class OptionsUtil extends Constants {
             .longOpt(TABLE_ARGS)
             .argName(TABLE_ARGS)
             .hasArg()
-            .required()
             .desc(TABLE_DESC_EXPORT)
             .build();
     options.addOption(opTable);
@@ -733,7 +706,6 @@ public class OptionsUtil extends Constants {
             .longOpt(TABLE_ARGS)
             .argName(TABLE_ARGS)
             .hasArg()
-            .required()
             .desc(TABLE_DESC_IMPORT)
             .build();
     options.addOption(opTable);
@@ -962,6 +934,235 @@ public class OptionsUtil extends Constants {
             .build();
 
     options.addOption(opTimestampPrecision);
+    return options;
+  }
+
+  public static Options createSubscriptionTsFileOptions() {
+    Options options = new Options();
+    Option opSqlDialect =
+        Option.builder(SQL_DIALECT_ARGS)
+            .longOpt(SQL_DIALECT_ARGS)
+            .argName(SQL_DIALECT_ARGS)
+            .hasArg()
+            .desc(SQL_DIALECT_DESC)
+            .build();
+    options.addOption(opSqlDialect);
+
+    Option opHost =
+        Option.builder(HOST_ARGS)
+            .longOpt(HOST_NAME)
+            .argName(HOST_NAME)
+            .hasArg()
+            .desc(HOST_DESC)
+            .build();
+    options.addOption(opHost);
+
+    Option opPort =
+        Option.builder(PORT_ARGS)
+            .longOpt(PORT_NAME)
+            .argName(PORT_NAME)
+            .hasArg()
+            .desc(PORT_DESC)
+            .build();
+    options.addOption(opPort);
+
+    Option opUsername =
+        Option.builder(USERNAME_ARGS)
+            .longOpt(USERNAME_NAME)
+            .argName(USERNAME_NAME)
+            .hasArg()
+            .desc(USERNAME_DESC)
+            .build();
+    options.addOption(opUsername);
+
+    Option opPassword =
+        Option.builder(PW_ARGS)
+            .longOpt(PW_NAME)
+            .optionalArg(true)
+            .argName(PW_NAME)
+            .hasArg()
+            .desc(PW_DESC)
+            .build();
+    options.addOption(opPassword);
+
+    Option opPath =
+        Option.builder(PATH_ARGS)
+            .longOpt(PATH_ARGS)
+            .argName(PATH_ARGS)
+            .hasArg()
+            .desc(PATH_DESC)
+            .build();
+    options.addOption(opPath);
+
+    Option opDatabase =
+        Option.builder(DB_ARGS).longOpt(DB_NAME).argName(DB_ARGS).hasArg().desc(DB_DESC).build();
+    options.addOption(opDatabase);
+
+    Option opTable =
+        Option.builder(TABLE_ARGS)
+            .longOpt(TABLE_ARGS)
+            .argName(TABLE_ARGS)
+            .hasArg()
+            .desc(TABLE_DESC)
+            .build();
+    options.addOption(opTable);
+    Option opStartTime =
+        Option.builder(START_TIME_ARGS)
+            .longOpt(START_TIME_ARGS)
+            .argName(START_TIME_ARGS)
+            .hasArg()
+            .desc(START_TIME_DESC)
+            .build();
+    options.addOption(opStartTime);
+
+    Option opEndTime =
+        Option.builder(END_TIME_ARGS)
+            .longOpt(END_TIME_ARGS)
+            .argName(END_TIME_ARGS)
+            .hasArg()
+            .desc(END_TIME_DESC)
+            .build();
+    options.addOption(opEndTime);
+
+    Option opFile =
+        Option.builder(TARGET_DIR_ARGS)
+            .longOpt(TARGET_DIR_NAME)
+            .argName(TARGET_DIR_ARGS_NAME)
+            .hasArg()
+            .desc(TARGET_DIR_SUBSCRIPTION_DESC)
+            .build();
+    options.addOption(opFile);
+
+    Option opThreadNum =
+        Option.builder(THREAD_NUM_ARGS)
+            .longOpt(THREAD_NUM_NAME)
+            .argName(THREAD_NUM_NAME)
+            .hasArg()
+            .desc(THREAD_NUM_DESC)
+            .build();
+    options.addOption(opThreadNum);
+
+    Option opHelp =
+        Option.builder(HELP_ARGS).longOpt(HELP_ARGS).hasArg(false).desc(HELP_DESC).build();
+    options.addOption(opHelp);
+    return options;
+  }
+
+  public static Options createExportSchemaOptions() {
+    Options options = createCommonOptions(new Options());
+    Option opTargetFile =
+        Option.builder(TARGET_DIR_ARGS)
+            .required()
+            .longOpt(TARGET_DIR_ARGS_NAME)
+            .hasArg()
+            .argName(TARGET_DIR_NAME)
+            .desc(TARGET_DIR_DESC)
+            .build();
+    options.addOption(opTargetFile);
+
+    Option targetPathPattern =
+        Option.builder(TARGET_PATH_ARGS)
+            .longOpt(TARGET_PATH_ARGS_NAME)
+            .hasArg()
+            .argName(TARGET_PATH_NAME)
+            .desc(TARGET_PATH_DESC)
+            .build();
+    options.addOption(targetPathPattern);
+
+    Option targetFileName =
+        Option.builder(TARGET_FILE_ARGS)
+            .longOpt(TARGET_FILE_NAME)
+            .hasArg()
+            .argName(TARGET_FILE_NAME)
+            .desc(TARGET_FILE_DESC)
+            .build();
+    options.addOption(targetFileName);
+
+    Option opLinesPerFile =
+        Option.builder(LINES_PER_FILE_ARGS)
+            .longOpt(LINES_PER_FILE_NAME)
+            .hasArg()
+            .argName(LINES_PER_FILE_NAME)
+            .desc(LINES_PER_FILE_DESC)
+            .build();
+    options.addOption(opLinesPerFile);
+
+    Option opTimeout =
+        Option.builder(TIMEOUT_ARGS)
+            .longOpt(TIMEOUT_NAME)
+            .hasArg()
+            .argName(TIMEOUT_ARGS)
+            .desc(TIMEOUT_DESC)
+            .build();
+    options.addOption(opTimeout);
+
+    Option opDatabase =
+        Option.builder(DB_ARGS).longOpt(DB_NAME).argName(DB_ARGS).hasArg().desc(DB_DESC).build();
+    options.addOption(opDatabase);
+
+    Option opTable =
+        Option.builder(TABLE_ARGS)
+            .longOpt(TABLE_ARGS)
+            .argName(TABLE_ARGS)
+            .hasArg()
+            .desc(TABLE_DESC_EXPORT)
+            .build();
+    options.addOption(opTable);
+
+    Option opHelp = Option.builder(HELP_ARGS).longOpt(HELP_ARGS).desc(HELP_DESC).build();
+    options.addOption(opHelp);
+
+    return options;
+  }
+
+  public static Options createImportSchemaOptions() {
+    Options options = createCommonOptions(new Options());
+
+    Option opFile =
+        Option.builder(FILE_ARGS)
+            .required()
+            .longOpt(FILE_NAME)
+            .argName(FILE_NAME)
+            .hasArg()
+            .desc(FILE_DESC)
+            .build();
+    options.addOption(opFile);
+
+    Option opFailedFile =
+        Option.builder(FAILED_FILE_ARGS)
+            .longOpt(FAILED_FILE_NAME)
+            .hasArg()
+            .argName(FAILED_FILE_ARGS_NAME)
+            .desc(FAILED_FILE_DESC)
+            .build();
+    options.addOption(opFailedFile);
+
+    Option opBatchPointSize =
+        Option.builder(BATCH_POINT_SIZE_ARGS)
+            .longOpt(BATCH_POINT_SIZE_NAME)
+            .hasArg()
+            .argName(BATCH_POINT_SIZE_ARGS_NAME)
+            .desc(BATCH_POINT_SIZE_LIMIT_DESC)
+            .build();
+    options.addOption(opBatchPointSize);
+
+    Option opFailedLinesPerFile =
+        Option.builder(LINES_PER_FAILED_FILE_ARGS)
+            .longOpt(LINES_PER_FAILED_FILE_ARGS_NAME)
+            .hasArg()
+            .argName(LINES_PER_FAILED_FILE_ARGS_NAME)
+            .desc(LINES_PER_FAILED_FILE_DESC)
+            .build();
+    options.addOption(opFailedLinesPerFile);
+
+    Option opDatabase =
+        Option.builder(DB_ARGS).longOpt(DB_NAME).argName(DB_ARGS).hasArg().desc(DB_DESC).build();
+    options.addOption(opDatabase);
+
+    Option opHelp =
+        Option.builder(Constants.HELP_ARGS).longOpt(Constants.HELP_ARGS).desc(HELP_DESC).build();
+    options.addOption(opHelp);
+
     return options;
   }
 }

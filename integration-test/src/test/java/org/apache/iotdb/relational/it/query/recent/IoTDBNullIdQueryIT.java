@@ -34,9 +34,11 @@ import org.junit.runner.RunWith;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 
+import static org.apache.iotdb.db.it.utils.TestUtils.createUser;
 import static org.apache.iotdb.db.it.utils.TestUtils.defaultFormatDataTime;
 import static org.apache.iotdb.db.it.utils.TestUtils.prepareTableData;
 import static org.apache.iotdb.db.it.utils.TestUtils.tableResultSetEqualTest;
@@ -74,6 +76,7 @@ public class IoTDBNullIdQueryIT {
 
   @BeforeClass
   public static void setUp() throws Exception {
+    EnvFactory.getEnv().getConfig().getCommonConfig().setEnforceStrongPassword(false);
     EnvFactory.getEnv().getConfig().getCommonConfig().setEnableCrossSpaceCompaction(false);
     EnvFactory.getEnv().initClusterEnvironment();
     prepareTableData(createSqls);
@@ -501,5 +504,48 @@ public class IoTDBNullIdQueryIT {
 
     expectedHeader = new String[] {"CurrentTimestamp"};
     tableResultSetFuzzyTest("show current_timestamp", expectedHeader, 1, DATABASE_NAME);
+  }
+
+  @Test
+  public void setSqlDialectTest() throws SQLException {
+    createUser("tempuser", "temppw123456");
+
+    try (Connection userCon = EnvFactory.getEnv().getConnection("tempuser", "temppw123456");
+        Statement userStmt = userCon.createStatement()) {
+      assertCurrentSqlDialect(true, userStmt);
+
+      // set Tree to Table
+      userStmt.execute("set sql_dialect=table");
+      assertCurrentSqlDialect(false, userStmt);
+
+      // set Table to Tree
+      userStmt.execute("set sql_dialect=tree");
+      assertCurrentSqlDialect(true, userStmt);
+    }
+  }
+
+  @Test
+  public void setSqlDialectContextCleanTest() throws SQLException {
+    try (Connection userCon = EnvFactory.getEnv().getConnection(BaseEnv.TABLE_SQL_DIALECT);
+        Statement userStmt = userCon.createStatement()) {
+      userStmt.execute("create database test1");
+      userStmt.execute("use test1");
+      userStmt.execute("set sql_dialect=tree");
+      assertCurrentSqlDialect(true, userStmt);
+      userStmt.execute("insert into root.db(time,s1) values (0,1), (1, 3), (2,5)");
+    }
+  }
+
+  public static void assertCurrentSqlDialect(boolean expectedTree, Statement statement)
+      throws SQLException {
+    ResultSet resultSet = statement.executeQuery("show current_sql_dialect");
+    ResultSetMetaData resultSetMetaData = resultSet.getMetaData();
+    assertEquals("CurrentSqlDialect", resultSetMetaData.getColumnName(1));
+    int count = 0;
+    while (resultSet.next()) {
+      assertEquals(expectedTree ? "TREE" : "TABLE", resultSet.getString(1));
+      count++;
+    }
+    assertEquals(1, count);
   }
 }

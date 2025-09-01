@@ -20,15 +20,20 @@
 package org.apache.iotdb.db.queryengine.plan.relational.planner;
 
 import org.apache.iotdb.commons.partition.SchemaPartition;
+import org.apache.iotdb.commons.path.PathPatternTree;
 import org.apache.iotdb.commons.schema.column.ColumnHeader;
 import org.apache.iotdb.commons.schema.column.ColumnHeaderConstant;
+import org.apache.iotdb.commons.schema.table.TreeViewSchema;
+import org.apache.iotdb.commons.schema.table.TsTable;
 import org.apache.iotdb.commons.utils.TestOnly;
+import org.apache.iotdb.db.exception.sql.SemanticException;
 import org.apache.iotdb.db.queryengine.common.MPPQueryContext;
 import org.apache.iotdb.db.queryengine.common.QueryId;
 import org.apache.iotdb.db.queryengine.common.SessionInfo;
 import org.apache.iotdb.db.queryengine.common.header.DatasetHeader;
 import org.apache.iotdb.db.queryengine.execution.warnings.WarningCollector;
 import org.apache.iotdb.db.queryengine.metric.QueryPlanCostMetricSet;
+import org.apache.iotdb.db.queryengine.plan.analyze.ClusterPartitionFetcher;
 import org.apache.iotdb.db.queryengine.plan.planner.plan.LogicalQueryPlan;
 import org.apache.iotdb.db.queryengine.plan.planner.plan.node.PlanNode;
 import org.apache.iotdb.db.queryengine.plan.planner.plan.node.WritePlanNode;
@@ -36,14 +41,22 @@ import org.apache.iotdb.db.queryengine.plan.planner.plan.node.metadata.read.Coun
 import org.apache.iotdb.db.queryengine.plan.planner.plan.node.pipe.PipeEnrichedWritePlanNode;
 import org.apache.iotdb.db.queryengine.plan.relational.analyzer.Analysis;
 import org.apache.iotdb.db.queryengine.plan.relational.analyzer.Field;
+import org.apache.iotdb.db.queryengine.plan.relational.analyzer.RelationId;
 import org.apache.iotdb.db.queryengine.plan.relational.analyzer.RelationType;
+import org.apache.iotdb.db.queryengine.plan.relational.analyzer.Scope;
 import org.apache.iotdb.db.queryengine.plan.relational.execution.querystats.PlanOptimizersStatsCollector;
+import org.apache.iotdb.db.queryengine.plan.relational.metadata.ColumnSchema;
 import org.apache.iotdb.db.queryengine.plan.relational.metadata.Metadata;
+import org.apache.iotdb.db.queryengine.plan.relational.metadata.QualifiedObjectName;
+import org.apache.iotdb.db.queryengine.plan.relational.metadata.TableMetadataImpl;
+import org.apache.iotdb.db.queryengine.plan.relational.metadata.TableSchema;
 import org.apache.iotdb.db.queryengine.plan.relational.planner.node.ExplainAnalyzeNode;
 import org.apache.iotdb.db.queryengine.plan.relational.planner.node.FilterNode;
+import org.apache.iotdb.db.queryengine.plan.relational.planner.node.IntoNode;
 import org.apache.iotdb.db.queryengine.plan.relational.planner.node.LimitNode;
 import org.apache.iotdb.db.queryengine.plan.relational.planner.node.OffsetNode;
 import org.apache.iotdb.db.queryengine.plan.relational.planner.node.OutputNode;
+import org.apache.iotdb.db.queryengine.plan.relational.planner.node.ProjectNode;
 import org.apache.iotdb.db.queryengine.plan.relational.planner.node.schema.CreateOrUpdateTableDeviceNode;
 import org.apache.iotdb.db.queryengine.plan.relational.planner.node.schema.TableDeviceAttributeUpdateNode;
 import org.apache.iotdb.db.queryengine.plan.relational.planner.node.schema.TableDeviceFetchNode;
@@ -59,6 +72,7 @@ import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.Delete;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.Explain;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.ExplainAnalyze;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.FetchDevice;
+import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.Insert;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.LoadTsFile;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.PipeEnriched;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.Query;
@@ -68,6 +82,7 @@ import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.Table;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.Update;
 import org.apache.iotdb.db.queryengine.plan.relational.sql.ast.WrappedStatement;
 import org.apache.iotdb.db.queryengine.plan.relational.type.InternalTypeManager;
+import org.apache.iotdb.db.schemaengine.table.DataNodeTableCache;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -81,10 +96,13 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.Objects.requireNonNull;
 import static org.apache.iotdb.db.queryengine.metric.QueryPlanCostMetricSet.LOGICAL_PLANNER;
 import static org.apache.iotdb.db.queryengine.metric.QueryPlanCostMetricSet.LOGICAL_PLAN_OPTIMIZE;
-import static org.apache.iotdb.db.queryengine.metric.QueryPlanCostMetricSet.TABLE_TYPE;
+import static org.apache.iotdb.db.queryengine.plan.relational.metadata.MetadataUtil.createQualifiedObjectName;
+import static org.apache.iotdb.db.queryengine.plan.relational.planner.QueryPlanner.visibleFields;
+import static org.apache.iotdb.db.queryengine.plan.relational.planner.node.OutputNode.COLUMN_NAME_PREFIX;
 import static org.apache.iotdb.db.queryengine.plan.relational.sql.ast.CountDevice.COUNT_DEVICE_HEADER_STRING;
 import static org.apache.iotdb.db.queryengine.plan.relational.sql.ast.ShowDevice.getDeviceColumnHeaderList;
 import static org.apache.iotdb.db.queryengine.plan.relational.type.InternalTypeManager.getTSDataType;
@@ -137,7 +155,7 @@ public class TableLogicalPlanner {
     if (analysis.isQuery()) {
       long logicalPlanCostTime = System.nanoTime() - startTime;
       QueryPlanCostMetricSet.getInstance()
-          .recordPlanCost(TABLE_TYPE, LOGICAL_PLANNER, logicalPlanCostTime);
+          .recordTablePlanCost(LOGICAL_PLANNER, logicalPlanCostTime);
       queryContext.setLogicalPlanCost(logicalPlanCostTime);
 
       startTime = System.nanoTime();
@@ -162,7 +180,7 @@ public class TableLogicalPlanner {
               - queryContext.getFetchSchemaCost();
       queryContext.setLogicalOptimizationCost(logicalOptimizationCost);
       QueryPlanCostMetricSet.getInstance()
-          .recordPlanCost(TABLE_TYPE, LOGICAL_PLAN_OPTIMIZE, logicalOptimizationCost);
+          .recordTablePlanCost(LOGICAL_PLAN_OPTIMIZE, logicalOptimizationCost);
     }
 
     return new LogicalQueryPlan(queryContext, planNode);
@@ -171,14 +189,15 @@ public class TableLogicalPlanner {
   private PlanNode planStatement(final Analysis analysis, Statement statement) {
     // Schema statements are handled here
     if (statement instanceof PipeEnriched) {
-      statement = ((PipeEnriched) statement).getInnerStatement();
-      if (statement instanceof CreateOrUpdateDevice) {
+      Statement innerStatement = ((PipeEnriched) statement).getInnerStatement();
+      if (innerStatement instanceof CreateOrUpdateDevice) {
         return new PipeEnrichedWritePlanNode(
-            (WritePlanNode) planCreateOrUpdateDevice((CreateOrUpdateDevice) statement, analysis));
+            (WritePlanNode)
+                planCreateOrUpdateDevice((CreateOrUpdateDevice) innerStatement, analysis));
       }
-      if (statement instanceof Update) {
+      if (innerStatement instanceof Update) {
         return new PipeEnrichedWritePlanNode(
-            (WritePlanNode) planUpdate((Update) statement, analysis));
+            (WritePlanNode) planUpdate((Update) innerStatement, analysis));
       }
     }
     if (statement instanceof CreateOrUpdateDevice) {
@@ -221,8 +240,70 @@ public class TableLogicalPlanner {
     if (statement instanceof ExplainAnalyze) {
       return planExplainAnalyze((ExplainAnalyze) statement, analysis);
     }
+    if (statement instanceof Insert) {
+      return genInsertPlan(analysis, (Insert) statement);
+    }
     throw new IllegalStateException(
         "Unsupported statement type: " + statement.getClass().getSimpleName());
+  }
+
+  private RelationPlan genInsertPlan(final Analysis analysis, final Insert node) {
+    // query plan and visible fields
+    Query query = node.getQuery();
+    RelationPlan plan = createRelationPlan(analysis, query);
+    List<Symbol> visibleFieldMappings = visibleFields(plan);
+
+    // table columns
+    Table table = node.getTable();
+    QualifiedObjectName targetTable = createQualifiedObjectName(sessionInfo, table.getName());
+    Optional<TableSchema> tableSchema = metadata.getTableSchema(sessionInfo, targetTable);
+    if (!tableSchema.isPresent()) {
+      TableMetadataImpl.throwTableNotExistsException(
+          targetTable.getDatabaseName(), targetTable.getObjectName());
+    }
+
+    // insert columns
+    Analysis.Insert insert = analysis.getInsert();
+    List<ColumnSchema> insertColumns = insert.getColumns();
+
+    Assignments.Builder assignments = Assignments.builder();
+    List<Symbol> neededInputColumnNames = new ArrayList<>(insertColumns.size());
+
+    for (int i = 0, size = insertColumns.size(); i < size; i++) {
+      Symbol output =
+          symbolAllocator.newSymbol(insertColumns.get(i).getName(), insertColumns.get(i).getType());
+      Symbol input = visibleFieldMappings.get(i);
+      neededInputColumnNames.add(output);
+      assignments.put(output, input.toSymbolReference());
+    }
+
+    // Project Node
+    ProjectNode projectNode =
+        new ProjectNode(
+            queryContext.getQueryId().genPlanNodeId(), plan.getRoot(), assignments.build());
+    List<Field> fields =
+        insertColumns.stream()
+            .map(
+                column ->
+                    Field.newUnqualified(
+                        column.getName(), column.getType(), column.getColumnCategory()))
+            .collect(toImmutableList());
+    Scope scope =
+        Scope.builder().withRelationType(RelationId.anonymous(), new RelationType(fields)).build();
+    plan = new RelationPlan(projectNode, scope, projectNode.getOutputSymbols(), Optional.empty());
+
+    // Into Node
+    IntoNode intoNode =
+        new IntoNode(
+            queryContext.getQueryId().genPlanNodeId(),
+            plan.getRoot(),
+            targetTable.getDatabaseName(),
+            table.getName().getSuffix(),
+            insertColumns,
+            neededInputColumnNames,
+            symbolAllocator.newSymbol(Insert.ROWS, Insert.ROWS_TYPE));
+    return new RelationPlan(
+        intoNode, analysis.getRootScope(), intoNode.getOutputSymbols(), Optional.empty());
   }
 
   private PlanNode createOutputPlan(RelationPlan plan, Analysis analysis) {
@@ -242,7 +323,17 @@ public class TableLogicalPlanner {
     } else {
       RelationType outputDescriptor = analysis.getOutputDescriptor();
       for (Field field : outputDescriptor.getVisibleFields()) {
-        String name = field.getName().orElse("_col" + columnNumber);
+        String name = field.getName().orElse(null);
+
+        if (name == null) {
+          String originColumnName = field.getOriginColumnName().orElse(null);
+          StringBuilder stringBuilder = new StringBuilder(COLUMN_NAME_PREFIX).append(columnNumber);
+          // process of expr with Column, we record originColumnName in Field when analyze
+          if (originColumnName != null) {
+            stringBuilder.append('_').append(originColumnName);
+          }
+          name = stringBuilder.toString();
+        }
 
         names.add(name);
         int fieldIndex = outputDescriptor.indexOf(field);
@@ -321,7 +412,7 @@ public class TableLogicalPlanner {
 
   private PlanNode planFetchDevice(final FetchDevice statement, final Analysis analysis) {
     final List<ColumnHeader> columnHeaderList =
-        getDeviceColumnHeaderList(statement.getDatabase(), statement.getTableName());
+        getDeviceColumnHeaderList(statement.getDatabase(), statement.getTableName(), null);
 
     analysis.setRespDatasetHeader(new DatasetHeader(columnHeaderList, true));
 
@@ -365,11 +456,12 @@ public class TableLogicalPlanner {
             queryId.genPlanNodeId(),
             statement.getDatabase(),
             statement.getTableName(),
-            statement.getIdDeterminedFilterList(),
+            statement.getTagDeterminedFilterList(),
             null,
             statement.getColumnHeaderList(),
             null,
-            Objects.isNull(statement.getIdFuzzyPredicate()) ? pushDownLimit : -1);
+            Objects.isNull(statement.getTagFuzzyPredicate()) ? pushDownLimit : -1,
+            statement.needAligned());
 
     // put the column type info into symbolAllocator to generate TypeProvider
     statement
@@ -381,9 +473,9 @@ public class TableLogicalPlanner {
                     TypeFactory.getType(columnHeader.getColumnType())));
 
     // Filter
-    if (Objects.nonNull(statement.getIdFuzzyPredicate())) {
+    if (Objects.nonNull(statement.getTagFuzzyPredicate())) {
       currentNode =
-          new FilterNode(queryId.genPlanNodeId(), currentNode, statement.getIdFuzzyPredicate());
+          new FilterNode(queryId.genPlanNodeId(), currentNode, statement.getTagFuzzyPredicate());
     }
 
     // Limit
@@ -407,8 +499,8 @@ public class TableLogicalPlanner {
             queryContext.getQueryId().genPlanNodeId(),
             statement.getDatabase(),
             statement.getTableName(),
-            statement.getIdDeterminedFilterList(),
-            statement.getIdFuzzyPredicate(),
+            statement.getTagDeterminedFilterList(),
+            statement.getTagFuzzyPredicate(),
             statement.getColumnHeaderList());
 
     // put the column type info into symbolAllocator to generate TypeProvider
@@ -442,8 +534,8 @@ public class TableLogicalPlanner {
         queryContext.getQueryId().genPlanNodeId(),
         statement.getDatabase(),
         statement.getTableName(),
-        statement.getIdDeterminedFilterList(),
-        statement.getIdFuzzyPredicate(),
+        statement.getTagDeterminedFilterList(),
+        statement.getTagFuzzyPredicate(),
         statement.getColumnHeaderList(),
         null,
         statement.getAssignments(),
@@ -453,13 +545,31 @@ public class TableLogicalPlanner {
   private void planTraverseDevice(final AbstractTraverseDevice statement, final Analysis analysis) {
     final String database = statement.getDatabase();
 
-    final SchemaPartition schemaPartition =
-        statement.isIdDetermined()
-            ? metadata.getSchemaPartition(database, statement.getPartitionKeyList())
-            : metadata.getSchemaPartition(database);
-    analysis.setSchemaPartitionInfo(schemaPartition);
+    final TsTable table =
+        DataNodeTableCache.getInstance().getTable(database, statement.getTableName());
 
-    if (schemaPartition.isEmpty()) {
+    if (TreeViewSchema.isTreeViewTable(table)) {
+      final PathPatternTree tree = new PathPatternTree();
+      tree.appendPathPattern(TreeViewSchema.getPrefixPattern(table));
+      tree.constructTree();
+
+      analysis.setSchemaPartitionInfo(
+          ClusterPartitionFetcher.getInstance().getSchemaPartition(tree));
+
+      if (analysis.getSchemaPartitionInfo().getSchemaPartitionMap().size() > 1) {
+        throw new SemanticException(
+            "Tree device view with multiple databases("
+                + analysis.getSchemaPartitionInfo().getSchemaPartitionMap().keySet()
+                + ") is unsupported yet.");
+      }
+    } else {
+      analysis.setSchemaPartitionInfo(
+          statement.isIdDetermined()
+              ? metadata.getSchemaPartition(database, statement.getPartitionKeyList())
+              : metadata.getSchemaPartition(database));
+    }
+
+    if (analysis.getSchemaPartitionInfo().isEmpty()) {
       analysis.setFinishQueryAfterAnalyze();
     }
   }
@@ -469,6 +579,16 @@ public class TableLogicalPlanner {
         createRelationPlan(analysis, (Query) (statement.getStatement()));
     Symbol symbol =
         symbolAllocator.newSymbol(ColumnHeaderConstant.EXPLAIN_ANALYZE, StringType.getInstance());
+
+    // recording permittedOutputs of ExplainAnalyzeNode's child
+    RelationType outputDescriptor = analysis.getOutputDescriptor(statement.getStatement());
+    ImmutableList.Builder<Symbol> childPermittedOutputs = ImmutableList.builder();
+    for (Field field : outputDescriptor.getVisibleFields()) {
+      int fieldIndex = outputDescriptor.indexOf(field);
+      Symbol columnSymbol = originalQueryPlan.getSymbol(fieldIndex);
+      childPermittedOutputs.add(columnSymbol);
+    }
+
     PlanNode newRoot =
         new ExplainAnalyzeNode(
             queryContext.getQueryId().genPlanNodeId(),
@@ -476,7 +596,8 @@ public class TableLogicalPlanner {
             statement.isVerbose(),
             queryContext.getLocalQueryId(),
             queryContext.getTimeOut(),
-            symbol);
+            symbol,
+            childPermittedOutputs.build());
     return new RelationPlan(
         newRoot,
         originalQueryPlan.getScope(),

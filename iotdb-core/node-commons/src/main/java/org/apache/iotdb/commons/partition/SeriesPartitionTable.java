@@ -22,19 +22,22 @@ package org.apache.iotdb.commons.partition;
 import org.apache.iotdb.common.rpc.thrift.TConsensusGroupId;
 import org.apache.iotdb.common.rpc.thrift.TSeriesPartitionSlot;
 import org.apache.iotdb.common.rpc.thrift.TTimePartitionSlot;
+import org.apache.iotdb.commons.conf.CommonDescriptor;
+import org.apache.iotdb.commons.utils.CommonDateTimeUtils;
 import org.apache.iotdb.commons.utils.ThriftCommonsSerDeUtils;
+import org.apache.iotdb.commons.utils.TimePartitionUtils;
 import org.apache.iotdb.confignode.rpc.thrift.TTimeSlotList;
 
 import org.apache.thrift.TException;
 import org.apache.thrift.protocol.TProtocol;
 import org.apache.tsfile.utils.ReadWriteIOUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -47,7 +50,12 @@ import java.util.stream.Collectors;
 
 public class SeriesPartitionTable {
 
-  private static final Logger LOGGER = LoggerFactory.getLogger(SeriesPartitionTable.class);
+  // should only be used in CN scope, in DN scope should directly use
+  // TimePartitionUtils.getTimePartitionInterval()
+  private static final long TIME_PARTITION_INTERVAL =
+      CommonDateTimeUtils.convertMilliTimeWithPrecision(
+          TimePartitionUtils.getTimePartitionInterval(),
+          CommonDescriptor.getInstance().getConfig().getTimestampPrecision());
 
   private final ConcurrentSkipListMap<TTimePartitionSlot, List<TConsensusGroupId>>
       seriesPartitionMap;
@@ -245,10 +253,21 @@ public class SeriesPartitionTable {
    * @param TTL The Time To Live
    * @param currentTimeSlot The current TimeSlot
    */
-  public void autoCleanPartitionTable(long TTL, TTimePartitionSlot currentTimeSlot) {
-    seriesPartitionMap
-        .entrySet()
-        .removeIf(entry -> entry.getKey().getStartTime() + TTL < currentTimeSlot.getStartTime());
+  public List<TTimePartitionSlot> autoCleanPartitionTable(
+      long TTL, TTimePartitionSlot currentTimeSlot) {
+    List<TTimePartitionSlot> removedTimePartitions = new ArrayList<>();
+    Iterator<Map.Entry<TTimePartitionSlot, List<TConsensusGroupId>>> iterator =
+        seriesPartitionMap.entrySet().iterator();
+    while (iterator.hasNext()) {
+      Map.Entry<TTimePartitionSlot, List<TConsensusGroupId>> entry = iterator.next();
+      TTimePartitionSlot timePartitionSlot = entry.getKey();
+      if (timePartitionSlot.getStartTime() + TIME_PARTITION_INTERVAL + TTL
+          <= currentTimeSlot.getStartTime()) {
+        removedTimePartitions.add(timePartitionSlot);
+        iterator.remove();
+      }
+    }
+    return removedTimePartitions;
   }
 
   public void serialize(OutputStream outputStream, TProtocol protocol)

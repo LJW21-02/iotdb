@@ -19,9 +19,15 @@
 
 package org.apache.iotdb.it.utils;
 
+import org.apache.iotdb.db.storageengine.dataregion.modification.DeletionPredicate;
+import org.apache.iotdb.db.storageengine.dataregion.modification.ModificationFile;
+import org.apache.iotdb.db.storageengine.dataregion.modification.TableDeletionEntry;
+
+import org.apache.tsfile.enums.ColumnCategory;
 import org.apache.tsfile.enums.TSDataType;
 import org.apache.tsfile.exception.write.WriteProcessException;
 import org.apache.tsfile.file.metadata.TableSchema;
+import org.apache.tsfile.read.common.TimeRange;
 import org.apache.tsfile.write.TsFileWriter;
 import org.apache.tsfile.write.record.Tablet;
 import org.apache.tsfile.write.schema.IMeasurementSchema;
@@ -45,7 +51,7 @@ public class TsFileTableGenerator implements AutoCloseable {
   private final TsFileWriter writer;
   private final Map<String, TreeSet<Long>> table2TimeSet;
   private final Map<String, List<IMeasurementSchema>> table2MeasurementSchema;
-  private final Map<String, List<Tablet.ColumnCategory>> table2ColumnCategory;
+  private final Map<String, List<ColumnCategory>> table2ColumnCategory;
   private Random random;
 
   public TsFileTableGenerator(final File tsFile) throws IOException {
@@ -60,7 +66,7 @@ public class TsFileTableGenerator implements AutoCloseable {
   public void registerTable(
       final String tableName,
       final List<IMeasurementSchema> columnSchemasList,
-      final List<Tablet.ColumnCategory> columnCategoryList) {
+      final List<ColumnCategory> columnCategoryList) {
     if (table2MeasurementSchema.containsKey(tableName)) {
       LOGGER.warn("Table {} already exists", tableName);
       return;
@@ -79,7 +85,7 @@ public class TsFileTableGenerator implements AutoCloseable {
         schemas.stream().map(IMeasurementSchema::getMeasurementName).collect(Collectors.toList());
     final List<TSDataType> dataTypeList =
         schemas.stream().map(IMeasurementSchema::getType).collect(Collectors.toList());
-    final List<Tablet.ColumnCategory> columnCategoryList = table2ColumnCategory.get(tableName);
+    final List<ColumnCategory> columnCategoryList = table2ColumnCategory.get(tableName);
     final TreeSet<Long> timeSet = table2TimeSet.get(tableName);
     final Tablet tablet = new Tablet(tableName, columnNameList, dataTypeList, columnCategoryList);
     final Object[] values = tablet.getValues();
@@ -172,11 +178,13 @@ public class TsFileTableGenerator implements AutoCloseable {
     tablet.addValue(row, column, String.format("test point %d", random.nextInt()));
   }
 
-  public long getTotalNumber() {
-    return table2TimeSet.entrySet().stream()
-        .mapToInt(
-            entry -> entry.getValue().size() * table2MeasurementSchema.get(entry.getKey()).size())
-        .sum();
+  public void generateDeletion(final String table) throws IOException {
+    try (final ModificationFile modificationFile =
+        new ModificationFile(ModificationFile.getExclusiveMods(tsFile), false)) {
+      modificationFile.write(
+          new TableDeletionEntry(
+              new DeletionPredicate(table), new TimeRange(Long.MIN_VALUE, Long.MAX_VALUE)));
+    }
   }
 
   @Override

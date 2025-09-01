@@ -22,7 +22,7 @@ package org.apache.iotdb.confignode.procedure;
 import org.apache.iotdb.common.rpc.thrift.TTimePartitionSlot;
 import org.apache.iotdb.commons.conf.CommonConfig;
 import org.apache.iotdb.commons.conf.CommonDescriptor;
-import org.apache.iotdb.commons.utils.TimePartitionUtils;
+import org.apache.iotdb.commons.utils.PathUtils;
 import org.apache.iotdb.confignode.consensus.request.write.partition.AutoCleanPartitionTablePlan;
 import org.apache.iotdb.confignode.manager.ConfigManager;
 import org.apache.iotdb.consensus.exception.ConsensusException;
@@ -32,6 +32,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 import static org.apache.iotdb.confignode.manager.partition.PartitionManager.CONSENSUS_WRITE_ERROR;
 
@@ -41,6 +42,10 @@ public class PartitionTableAutoCleaner<Env> extends InternalProcedure<Env> {
   private static final Logger LOGGER = LoggerFactory.getLogger(PartitionTableAutoCleaner.class);
 
   private static final CommonConfig COMMON_CONFIG = CommonDescriptor.getInstance().getConfig();
+
+  private static final String timestampPrecision =
+      CommonDescriptor.getInstance().getConfig().getTimestampPrecision();
+
   private final ConfigManager configManager;
 
   public PartitionTableAutoCleaner(ConfigManager configManager) {
@@ -51,12 +56,18 @@ public class PartitionTableAutoCleaner<Env> extends InternalProcedure<Env> {
   @Override
   protected void periodicExecute(Env env) {
     List<String> databases = configManager.getClusterSchemaManager().getDatabaseNames(null);
-    Map<String, Long> databaseTTLMap =
-        configManager.getClusterSchemaManager().getTTLInfoForUpgrading();
+    Map<String, Long> databaseTTLMap = new TreeMap<>();
     for (String database : databases) {
-      long subTreeMaxTTL = configManager.getTTLManager().getDatabaseMaxTTL(database);
-      databaseTTLMap.put(
-          database, Math.max(subTreeMaxTTL, databaseTTLMap.getOrDefault(database, -1L)));
+      long databaseTTL =
+          PathUtils.isTableModelDatabase(database)
+              ? configManager.getClusterSchemaManager().getDatabaseMaxTTL(database)
+              : configManager.getTTLManager().getDatabaseMaxTTL(database);
+      databaseTTLMap.put(database, databaseTTL);
+    }
+    LOGGER.info(
+        "[PartitionTableCleaner] Periodically activate PartitionTableAutoCleaner, databaseTTL: {}",
+        databaseTTLMap);
+    for (String database : databases) {
       long databaseTTL = databaseTTLMap.get(database);
       if (!configManager.getPartitionManager().isDatabaseExist(database)
           || databaseTTL < 0
@@ -66,9 +77,11 @@ public class PartitionTableAutoCleaner<Env> extends InternalProcedure<Env> {
       }
     }
     if (!databaseTTLMap.isEmpty()) {
+      LOGGER.info(
+          "[PartitionTableCleaner] Periodically activate PartitionTableAutoCleaner for: {}",
+          databaseTTLMap);
       // Only clean the partition table when necessary
-      TTimePartitionSlot currentTimePartitionSlot =
-          TimePartitionUtils.getCurrentTimePartitionSlot();
+      TTimePartitionSlot currentTimePartitionSlot = getCurrentTimePartitionSlot();
       try {
         configManager
             .getConsensusManager()
@@ -76,6 +89,21 @@ public class PartitionTableAutoCleaner<Env> extends InternalProcedure<Env> {
       } catch (ConsensusException e) {
         LOGGER.warn(CONSENSUS_WRITE_ERROR, e);
       }
+    }
+  }
+
+  /**
+   * @return The time partition slot corresponding to current timestamp. Note that we do not shift
+   *     the start time to the correct starting point, since this interface only constructs a time
+   *     reference position for the partition table cleaner.
+   */
+  private static TTimePartitionSlot getCurrentTimePartitionSlot() {
+    if ("ms".equals(timestampPrecision)) {
+      return new TTimePartitionSlot(System.currentTimeMillis());
+    } else if ("us".equals(timestampPrecision)) {
+      return new TTimePartitionSlot(System.currentTimeMillis() * 1000);
+    } else {
+      return new TTimePartitionSlot(System.currentTimeMillis() * 1000_000);
     }
   }
 }

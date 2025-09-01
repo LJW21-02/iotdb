@@ -43,20 +43,14 @@ public class LastAccumulator implements TableAccumulator {
   protected TsPrimitiveType lastValue;
   protected long maxTime = Long.MIN_VALUE;
   protected boolean initResult = false;
-  protected boolean isTimeColumn = false;
 
-  public LastAccumulator(TSDataType seriesDataType, boolean isTimeColumn) {
+  public LastAccumulator(TSDataType seriesDataType) {
     this.seriesDataType = seriesDataType;
-    this.isTimeColumn = isTimeColumn;
     lastValue = TsPrimitiveType.getByType(seriesDataType);
   }
 
   public boolean hasInitResult() {
     return this.initResult;
-  }
-
-  public boolean isTimeColumn() {
-    return this.isTimeColumn;
   }
 
   public long getMaxTime() {
@@ -74,7 +68,7 @@ public class LastAccumulator implements TableAccumulator {
 
   @Override
   public TableAccumulator copy() {
-    return new LastAccumulator(seriesDataType, isTimeColumn);
+    return new LastAccumulator(seriesDataType);
   }
 
   @Override
@@ -105,7 +99,7 @@ public class LastAccumulator implements TableAccumulator {
         return;
       default:
         throw new UnSupportedDataTypeException(
-            String.format("Unsupported data type in Last: %s", seriesDataType));
+            String.format("Unsupported data type in LAST: %s", seriesDataType));
     }
   }
 
@@ -115,7 +109,7 @@ public class LastAccumulator implements TableAccumulator {
         argument instanceof BinaryColumn
             || (argument instanceof RunLengthEncodedColumn
                 && ((RunLengthEncodedColumn) argument).getValue() instanceof BinaryColumn),
-        "intermediate input and output of Last should be BinaryColumn");
+        "intermediate input and output of LAST should be BinaryColumn");
 
     for (int i = 0; i < argument.getPositionCount(); i++) {
       if (argument.isNull(i)) {
@@ -159,7 +153,7 @@ public class LastAccumulator implements TableAccumulator {
           break;
         default:
           throw new UnSupportedDataTypeException(
-              String.format("Unsupported data type in Last Aggregation: %s", seriesDataType));
+              String.format("Unsupported data type in LAST Aggregation: %s", seriesDataType));
       }
     }
   }
@@ -168,7 +162,7 @@ public class LastAccumulator implements TableAccumulator {
   public void evaluateIntermediate(ColumnBuilder columnBuilder) {
     checkArgument(
         columnBuilder instanceof BinaryColumnBuilder,
-        "intermediate input and output of Last should be BinaryColumn");
+        "intermediate input and output of LAST should be BinaryColumn");
 
     if (!initResult) {
       columnBuilder.appendNull();
@@ -207,7 +201,7 @@ public class LastAccumulator implements TableAccumulator {
           break;
         default:
           throw new UnSupportedDataTypeException(
-              String.format("Unsupported data type in Last aggregation: %s", seriesDataType));
+              String.format("Unsupported data type in LAST aggregation: %s", seriesDataType));
       }
     }
   }
@@ -229,10 +223,8 @@ public class LastAccumulator implements TableAccumulator {
         updateIntLastValue((int) statistics[0].getLastValue(), statistics[0].getEndTime());
         break;
       case INT64:
-        updateLongLastValue((long) statistics[0].getLastValue(), statistics[0].getEndTime());
-        break;
       case TIMESTAMP:
-        updateLongLastValue(statistics[0].getEndTime(), statistics[0].getEndTime());
+        updateLongLastValue((long) statistics[0].getLastValue(), statistics[0].getEndTime());
         break;
       case FLOAT:
         updateFloatLastValue((float) statistics[0].getLastValue(), statistics[0].getEndTime());
@@ -250,7 +242,7 @@ public class LastAccumulator implements TableAccumulator {
         break;
       default:
         throw new UnSupportedDataTypeException(
-            String.format("Unsupported data type in Last Aggregation: %s", seriesDataType));
+            String.format("Unsupported data type in LAST Aggregation: %s", seriesDataType));
     }
   }
 

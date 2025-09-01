@@ -35,6 +35,7 @@ import org.apache.commons.cli.DefaultParser;
 import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
+import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.thrift.TException;
 import org.jline.reader.LineReader;
@@ -206,9 +207,7 @@ public class ExportData extends AbstractDataTool {
       }
     } else {
       ioTPrinter.println(
-          String.format(
-              "Invalid args: Required values for option '%s' not provided",
-              Constants.FILE_TYPE_NAME));
+          String.format(Constants.REQUIRED_ARGS_ERROR_MSG, Constants.FILE_TYPE_NAME));
       System.exit(Constants.CODE_ERROR);
     }
     int exitCode = Constants.CODE_OK;
@@ -219,7 +218,6 @@ public class ExportData extends AbstractDataTool {
         System.exit(Constants.CODE_ERROR);
       }
       AbstractExportData exportData;
-      // check timePrecision by session
       exportData = new ExportDataTree();
       exportData.init();
       if (!sqlDialectTree) {
@@ -270,6 +268,10 @@ public class ExportData extends AbstractDataTool {
     if (timeoutString != null) {
       timeout = Long.parseLong(timeoutString);
     }
+    String rpcMaxFrameSizeString = commandLine.getOptionValue(Constants.RPC_MAX_FRAME_SIZE_ARGS);
+    if (rpcMaxFrameSizeString != null) {
+      rpcMaxFrameSize = Integer.parseInt(rpcMaxFrameSizeString);
+    }
     if (needDataTypePrinted == null) {
       needDataTypePrinted = true;
     }
@@ -297,14 +299,14 @@ public class ExportData extends AbstractDataTool {
     }
     if (commandLine.getOptionValue(Constants.DB_ARGS) != null) {
       database = commandLine.getOptionValue(Constants.DB_ARGS).toLowerCase();
+      if (ObjectUtils.isNotEmpty(database) && "information_schema".equalsIgnoreCase(database)) {
+        ioTPrinter.println(
+            String.format("Does not support exporting system databases %s", database));
+        System.exit(Constants.CODE_ERROR);
+      }
     }
     if (commandLine.getOptionValue(Constants.TABLE_ARGS) != null) {
       table = commandLine.getOptionValue(Constants.TABLE_ARGS).toLowerCase();
-    } else {
-      if (!sqlDialectTree && StringUtils.isBlank(queryCommand)) {
-        ioTPrinter.println(Constants.queryTableParamRequired);
-        System.exit(Constants.CODE_ERROR);
-      }
     }
     if (commandLine.getOptionValue(Constants.START_TIME_ARGS) != null) {
       startTime = commandLine.getOptionValue(Constants.START_TIME_ARGS);

@@ -61,18 +61,20 @@ public class IoTDBPipeAutoConflictIT extends AbstractPipeTableModelDualManualIT 
         .setAutoCreateSchemaEnabled(true)
         .setConfigNodeConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS)
         .setSchemaRegionConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS)
-        .setDataRegionConsensusProtocolClass(ConsensusFactory.IOT_CONSENSUS);
+        .setDataRegionConsensusProtocolClass(ConsensusFactory.IOT_CONSENSUS)
+        .setDnConnectionTimeoutMs(600000)
+        .setPipeMemoryManagementEnabled(false)
+        .setIsPipeEnableMemoryCheck(false);
     receiverEnv
         .getConfig()
         .getCommonConfig()
         .setAutoCreateSchemaEnabled(true)
         .setConfigNodeConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS)
         .setSchemaRegionConsensusProtocolClass(ConsensusFactory.RATIS_CONSENSUS)
-        .setDataRegionConsensusProtocolClass(ConsensusFactory.IOT_CONSENSUS);
-
-    // 10 min, assert that the operations will not time out
-    senderEnv.getConfig().getCommonConfig().setDnConnectionTimeoutMs(600000);
-    receiverEnv.getConfig().getCommonConfig().setDnConnectionTimeoutMs(600000);
+        .setDataRegionConsensusProtocolClass(ConsensusFactory.IOT_CONSENSUS)
+        .setDnConnectionTimeoutMs(600000)
+        .setPipeMemoryManagementEnabled(false)
+        .setIsPipeEnableMemoryCheck(false);
 
     senderEnv.initClusterEnvironment();
     receiverEnv.initClusterEnvironment();
@@ -111,6 +113,7 @@ public class IoTDBPipeAutoConflictIT extends AbstractPipeTableModelDualManualIT 
       extractorAttributes.put("capture.table", "true");
       // Add this property to avoid making self cycle.
       extractorAttributes.put("source.forwarding-pipe-requests", "false");
+      extractorAttributes.put("user", "root");
 
       connectorAttributes.put("sink", "iotdb-thrift-sink");
       connectorAttributes.put("sink.batch.enable", "false");
@@ -142,6 +145,7 @@ public class IoTDBPipeAutoConflictIT extends AbstractPipeTableModelDualManualIT 
       extractorAttributes.put("capture.table", "true");
       // Add this property to avoid to make self cycle.
       extractorAttributes.put("source.forwarding-pipe-requests", "false");
+      extractorAttributes.put("user", "root");
 
       connectorAttributes.put("connector", "iotdb-thrift-connector");
       connectorAttributes.put("connector.batch.enable", "false");
@@ -206,6 +210,7 @@ public class IoTDBPipeAutoConflictIT extends AbstractPipeTableModelDualManualIT 
       extractorAttributes.put("table-name", "test.*");
       extractorAttributes.put("capture.table", "true");
       extractorAttributes.put("source.forwarding-pipe-requests", "false");
+      extractorAttributes.put("user", "root");
 
       connectorAttributes.put("connector", "iotdb-thrift-connector");
       connectorAttributes.put("connector.batch.enable", "false");
@@ -237,6 +242,7 @@ public class IoTDBPipeAutoConflictIT extends AbstractPipeTableModelDualManualIT 
       extractorAttributes.put("table-name", "test.*");
       extractorAttributes.put("capture.table", "true");
       extractorAttributes.put("source.forwarding-pipe-requests", "false");
+      extractorAttributes.put("user", "root");
 
       connectorAttributes.put("connector", "iotdb-thrift-connector");
       connectorAttributes.put("connector.batch.enable", "true");

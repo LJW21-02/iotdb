@@ -469,7 +469,7 @@ public class IoTDBInsertWithQueryIT {
 
   // test count
   private void selectAndCount(int res) {
-    String selectSql = "select * from root.**";
+    String selectSql = "select * from root.fans.**";
 
     try (Connection connection = EnvFactory.getEnv().getConnection();
         Statement statement = connection.createStatement()) {
@@ -495,7 +495,7 @@ public class IoTDBInsertWithQueryIT {
 
   // test order
   private void select() {
-    String selectSql = "select * from root.**";
+    String selectSql = "select * from root.fans.**";
 
     try (Connection connection = EnvFactory.getEnv().getConnection();
         Statement statement = connection.createStatement()) {

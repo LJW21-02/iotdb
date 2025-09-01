@@ -18,15 +18,13 @@
  */
 package org.apache.iotdb.db.queryengine.plan.relational.sql.rewrite;
 
-import org.apache.iotdb.db.queryengine.plan.relational.metadata.Metadata;
-
 import com.google.common.collect.ImmutableSet;
 
 public class StatementRewriteFactory {
   private final StatementRewrite statementRewrite;
 
-  public StatementRewriteFactory(Metadata metadata) {
-    this.statementRewrite = new StatementRewrite(ImmutableSet.of(new ShowRewrite(metadata)));
+  public StatementRewriteFactory() {
+    this.statementRewrite = new StatementRewrite(ImmutableSet.of(new ShowRewrite()));
   }
 
   public StatementRewrite getStatementRewrite() {

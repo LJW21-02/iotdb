@@ -56,12 +56,14 @@ import org.apache.iotdb.service.rpc.thrift.TSQueryTemplateReq;
 import org.apache.iotdb.service.rpc.thrift.TSQueryTemplateResp;
 import org.apache.iotdb.service.rpc.thrift.TSSetSchemaTemplateReq;
 import org.apache.iotdb.service.rpc.thrift.TSUnsetSchemaTemplateReq;
+import org.apache.iotdb.session.rpccompress.TabletEncoder;
 import org.apache.iotdb.session.template.MeasurementNode;
 import org.apache.iotdb.session.template.TemplateQueryType;
 import org.apache.iotdb.session.util.SessionUtils;
 import org.apache.iotdb.session.util.ThreadUtils;
 
 import org.apache.thrift.TException;
+import org.apache.tsfile.common.conf.TSFileDescriptor;
 import org.apache.tsfile.enums.TSDataType;
 import org.apache.tsfile.file.metadata.IDeviceID;
 import org.apache.tsfile.file.metadata.enums.CompressionType;
@@ -137,7 +139,9 @@ public class Session implements ISession {
    */
   private long queryTimeoutInMs = -1;
 
-  protected boolean enableRPCCompression;
+  protected boolean enableThriftRpcCompaction;
+  protected boolean enableIoTDBRpcCompression = true;
+  protected int tabletCompressionMinRowSize = 10;
   protected int connectionTimeoutInMs;
   protected ZoneId zoneId;
   protected int thriftDefaultBufferSize;
@@ -192,7 +196,7 @@ public class Session implements ISession {
 
   protected long retryIntervalInMs = SessionConfig.RETRY_INTERVAL_IN_MS;
 
-  protected String sqlDialect = SessionConfig.SQL_DIALECT;
+  protected volatile String sqlDialect = SessionConfig.SQL_DIALECT;
 
   // may be null
   protected volatile String database;
@@ -214,6 +218,13 @@ public class Session implements ISession {
   private static final String ALL_VALUES_ARE_NULL_MULTI_DEVICES =
       "All values are null and this submission is ignored,deviceIds are [{}],times are [{}],measurements are [{}]";
   private static final String ALL_INSERT_DATA_IS_NULL = "All inserted data is null.";
+
+  protected static final String TABLE = "table";
+  protected static final String TREE = "tree";
+
+  private CompressionType compressionType =
+      TSFileDescriptor.getInstance().getConfig().getCompressor();
+  public Map<TSDataType, TSEncoding> columnEncodersMap = Collections.emptyMap();
 
   public Session(String host, int rpcPort) {
     this(
@@ -422,7 +433,7 @@ public class Session implements ISession {
     if (nodeUrls.isEmpty()) {
       throw new IllegalArgumentException("nodeUrls shouldn't be empty.");
     }
-    Collections.shuffle(nodeUrls);
+    nodeUrls = shuffleNodeUrls(nodeUrls);
     this.nodeUrls = nodeUrls;
     this.username = username;
     this.password = password;
@@ -439,13 +450,18 @@ public class Session implements ISession {
       if (builder.nodeUrls.isEmpty()) {
         throw new IllegalArgumentException("nodeUrls shouldn't be empty.");
       }
-      Collections.shuffle(builder.nodeUrls);
+      builder.nodeUrls = shuffleNodeUrls(builder.nodeUrls);
       this.nodeUrls = builder.nodeUrls;
       this.enableQueryRedirection = true;
     } else {
       this.defaultEndPoint = new TEndPoint(builder.host, builder.rpcPort);
       this.enableQueryRedirection = builder.enableRedirection;
     }
+    this.enableThriftRpcCompaction = builder.isThriftRpcCompactionEnabled;
+    this.enableIoTDBRpcCompression = builder.isIoTDBRpcCompressionEnabled;
+    this.tabletCompressionMinRowSize = builder.tabletCompressionMinRowSize;
+    this.compressionType = builder.compressionType;
+    this.columnEncodersMap = builder.columnEncodersMap;
     this.enableRedirection = builder.enableRedirection;
     this.enableRecordsAutoConvertTablet = builder.enableRecordsAutoConvertTablet;
     this.username = builder.username;
@@ -492,12 +508,12 @@ public class Session implements ISession {
   }
 
   @Override
-  public synchronized void open(boolean enableRPCCompression) throws IoTDBConnectionException {
-    open(enableRPCCompression, SessionConfig.DEFAULT_CONNECTION_TIMEOUT_MS);
+  public synchronized void open(boolean enableRPCCompaction) throws IoTDBConnectionException {
+    open(enableRPCCompaction, SessionConfig.DEFAULT_CONNECTION_TIMEOUT_MS);
   }
 
   @Override
-  public synchronized void open(boolean enableRPCCompression, int connectionTimeoutInMs)
+  public synchronized void open(boolean enableRPCCompaction, int connectionTimeoutInMs)
       throws IoTDBConnectionException {
     if (!isClosed) {
       return;
@@ -527,22 +543,21 @@ public class Session implements ISession {
               useSSL,
               trustStore,
               trustStorePwd,
-              enableRPCCompression,
+              enableRPCCompaction,
               version.toString());
     } else {
       this.availableNodes = new DummyNodesSupplier(getNodeUrls());
     }
 
-    this.enableRPCCompression = enableRPCCompression;
     this.connectionTimeoutInMs = connectionTimeoutInMs;
-    defaultSessionConnection = constructSessionConnection(this, defaultEndPoint, zoneId);
-    defaultSessionConnection.setEnableRedirect(enableQueryRedirection);
+    setDefaultSessionConnection(constructSessionConnection(this, defaultEndPoint, zoneId));
+    getDefaultSessionConnection().setEnableRedirect(enableQueryRedirection);
     isClosed = false;
     if (enableRedirection || enableQueryRedirection) {
       deviceIdToEndpoint = new ConcurrentHashMap<>();
       tableModelDeviceIdToEndpoint = new ConcurrentHashMap<>();
       endPointToSessionConnection = new ConcurrentHashMap<>();
-      endPointToSessionConnection.put(defaultEndPoint, defaultSessionConnection);
+      endPointToSessionConnection.put(defaultEndPoint, getDefaultSessionConnection());
     }
   }
 
@@ -563,6 +578,16 @@ public class Session implements ISession {
             });
   }
 
+  private static List<String> shuffleNodeUrls(List<String> endPoints) {
+    try {
+      Collections.shuffle(endPoints);
+    } catch (UnsupportedOperationException e) {
+      endPoints = new ArrayList<>(endPoints);
+      Collections.shuffle(endPoints);
+    }
+    return endPoints;
+  }
+
   private List<TEndPoint> getNodeUrls() {
     if (defaultEndPoint != null) {
       return Collections.singletonList(defaultEndPoint);
@@ -573,7 +598,7 @@ public class Session implements ISession {
 
   @Override
   public synchronized void open(
-      boolean enableRPCCompression,
+      boolean enableThriftRpcCompaction,
       int connectionTimeoutInMs,
       Map<String, TEndPoint> deviceIdToEndpoint,
       INodeSupplier nodesSupplier)
@@ -583,22 +608,22 @@ public class Session implements ISession {
     }
 
     this.availableNodes = nodesSupplier;
-    this.enableRPCCompression = enableRPCCompression;
+    this.enableThriftRpcCompaction = enableThriftRpcCompaction;
     this.connectionTimeoutInMs = connectionTimeoutInMs;
-    defaultSessionConnection = constructSessionConnection(this, defaultEndPoint, zoneId);
-    defaultSessionConnection.setEnableRedirect(enableQueryRedirection);
+    setDefaultSessionConnection(constructSessionConnection(this, defaultEndPoint, zoneId));
+    getDefaultSessionConnection().setEnableRedirect(enableQueryRedirection);
     isClosed = false;
     if (enableRedirection || enableQueryRedirection) {
       this.deviceIdToEndpoint = deviceIdToEndpoint;
       this.tableModelDeviceIdToEndpoint = new ConcurrentHashMap<>();
       endPointToSessionConnection = new ConcurrentHashMap<>();
-      endPointToSessionConnection.put(defaultEndPoint, defaultSessionConnection);
+      endPointToSessionConnection.put(defaultEndPoint, getDefaultSessionConnection());
     }
   }
 
   @Override
   public synchronized void open(
-      boolean enableRPCCompression,
+      boolean enableThriftRpcCompaction,
       int connectionTimeoutInMs,
       Map<String, TEndPoint> deviceIdToEndpoint,
       Map<IDeviceID, TEndPoint> tableModelDeviceIdToEndpoint,
@@ -609,32 +634,33 @@ public class Session implements ISession {
     }
 
     this.availableNodes = nodesSupplier;
-    this.enableRPCCompression = enableRPCCompression;
+    this.enableThriftRpcCompaction = enableThriftRpcCompaction;
     this.connectionTimeoutInMs = connectionTimeoutInMs;
-    defaultSessionConnection = constructSessionConnection(this, defaultEndPoint, zoneId);
-    defaultSessionConnection.setEnableRedirect(enableQueryRedirection);
+    setDefaultSessionConnection(constructSessionConnection(this, defaultEndPoint, zoneId));
+    getDefaultSessionConnection().setEnableRedirect(enableQueryRedirection);
     isClosed = false;
     if (enableRedirection || enableQueryRedirection) {
       this.deviceIdToEndpoint = deviceIdToEndpoint;
       this.tableModelDeviceIdToEndpoint = tableModelDeviceIdToEndpoint;
       endPointToSessionConnection = new ConcurrentHashMap<>();
-      endPointToSessionConnection.put(defaultEndPoint, defaultSessionConnection);
+      endPointToSessionConnection.put(defaultEndPoint, getDefaultSessionConnection());
     }
   }
 
   @Override
   public synchronized void close() throws IoTDBConnectionException {
-    if (isClosed) {
-      return;
-    }
     try {
+      if (isClosed) {
+        return;
+      }
       if (enableRedirection) {
         for (SessionConnection sessionConnection : endPointToSessionConnection.values()) {
           sessionConnection.close();
         }
-      } else {
-        defaultSessionConnection.close();
+        endPointToSessionConnection.clear();
       }
+      getDefaultSessionConnection().close();
+      setDefaultSessionConnection(null);
     } finally {
       // if executorService is null, it means that availableNodes is got from SessionPool and we
       // shouldn't clean that
@@ -666,58 +692,58 @@ public class Session implements ISession {
   }
 
   @Override
-  public synchronized String getTimeZone() {
-    return defaultSessionConnection.getTimeZone();
+  public synchronized String getTimeZone() throws IoTDBConnectionException {
+    return getDefaultSessionConnection().getTimeZone();
   }
 
   @Override
   public synchronized void setTimeZone(String zoneId)
       throws StatementExecutionException, IoTDBConnectionException {
-    defaultSessionConnection.setTimeZone(zoneId);
+    getDefaultSessionConnection().setTimeZone(zoneId);
     this.zoneId = ZoneId.of(zoneId);
   }
 
   /** Only changes the member variable of the Session object without sending it to server. */
   @Override
-  public void setTimeZoneOfSession(String zoneId) {
-    defaultSessionConnection.setTimeZoneOfSession(zoneId);
+  public void setTimeZoneOfSession(String zoneId) throws IoTDBConnectionException {
+    getDefaultSessionConnection().setTimeZoneOfSession(zoneId);
     this.zoneId = ZoneId.of(zoneId);
   }
 
   @Override
   public void setStorageGroup(String storageGroup)
       throws IoTDBConnectionException, StatementExecutionException {
-    defaultSessionConnection.setStorageGroup(storageGroup);
+    getDefaultSessionConnection().setStorageGroup(storageGroup);
   }
 
   @Override
   public void deleteStorageGroup(String storageGroup)
       throws IoTDBConnectionException, StatementExecutionException {
-    defaultSessionConnection.deleteStorageGroups(Collections.singletonList(storageGroup));
+    getDefaultSessionConnection().deleteStorageGroups(Collections.singletonList(storageGroup));
   }
 
   @Override
   public void deleteStorageGroups(List<String> storageGroups)
       throws IoTDBConnectionException, StatementExecutionException {
-    defaultSessionConnection.deleteStorageGroups(storageGroups);
+    getDefaultSessionConnection().deleteStorageGroups(storageGroups);
   }
 
   @Override
   public void createDatabase(String database)
       throws IoTDBConnectionException, StatementExecutionException {
-    defaultSessionConnection.setStorageGroup(database);
+    getDefaultSessionConnection().setStorageGroup(database);
   }
 
   @Override
   public void deleteDatabase(String database)
       throws IoTDBConnectionException, StatementExecutionException {
-    defaultSessionConnection.deleteStorageGroups(Collections.singletonList(database));
+    getDefaultSessionConnection().deleteStorageGroups(Collections.singletonList(database));
   }
 
   @Override
   public void deleteDatabases(List<String> databases)
       throws IoTDBConnectionException, StatementExecutionException {
-    defaultSessionConnection.deleteStorageGroups(databases);
+    getDefaultSessionConnection().deleteStorageGroups(databases);
   }
 
   @Override
@@ -726,7 +752,7 @@ public class Session implements ISession {
       throws IoTDBConnectionException, StatementExecutionException {
     TSCreateTimeseriesReq request =
         genTSCreateTimeseriesReq(path, dataType, encoding, compressor, null, null, null, null);
-    defaultSessionConnection.createTimeseries(request);
+    getDefaultSessionConnection().createTimeseries(request);
   }
 
   @Override
@@ -743,7 +769,7 @@ public class Session implements ISession {
     TSCreateTimeseriesReq request =
         genTSCreateTimeseriesReq(
             path, dataType, encoding, compressor, props, tags, attributes, measurementAlias);
-    defaultSessionConnection.createTimeseries(request);
+    getDefaultSessionConnection().createTimeseries(request);
   }
 
   private TSCreateTimeseriesReq genTSCreateTimeseriesReq(
@@ -786,7 +812,7 @@ public class Session implements ISession {
             measurementAliasList,
             null,
             null);
-    defaultSessionConnection.createAlignedTimeseries(request);
+    getDefaultSessionConnection().createAlignedTimeseries(request);
   }
 
   @Override
@@ -810,7 +836,7 @@ public class Session implements ISession {
             measurementAliasList,
             tagsList,
             attributesList);
-    defaultSessionConnection.createAlignedTimeseries(request);
+    getDefaultSessionConnection().createAlignedTimeseries(request);
   }
 
   private TSCreateAlignedTimeseriesReq getTSCreateAlignedTimeseriesReq(
@@ -829,8 +855,26 @@ public class Session implements ISession {
     request.setEncodings(encodings.stream().map(TSEncoding::ordinal).collect(Collectors.toList()));
     request.setCompressors(
         compressors.stream().map(i -> (int) i.serialize()).collect(Collectors.toList()));
+    if (measurementAliasList != null) {
+      measurementAliasList =
+          measurementAliasList.stream()
+              .map(value -> value != null ? value : "")
+              .collect(Collectors.toList());
+    }
     request.setMeasurementAlias(measurementAliasList);
+    if (tagsList != null) {
+      tagsList =
+          tagsList.stream()
+              .map(value -> value != null ? value : new HashMap<String, String>())
+              .collect(Collectors.toList());
+    }
     request.setTagsList(tagsList);
+    if (attributesList != null) {
+      attributesList =
+          attributesList.stream()
+              .map(value -> value != null ? value : new HashMap<String, String>())
+              .collect(Collectors.toList());
+    }
     request.setAttributesList(attributesList);
     return request;
   }
@@ -856,7 +900,7 @@ public class Session implements ISession {
             tagsList,
             attributesList,
             measurementAliasList);
-    defaultSessionConnection.createMultiTimeseries(request);
+    getDefaultSessionConnection().createMultiTimeseries(request);
   }
 
   private TSCreateMultiTimeseriesReq genTSCreateMultiTimeseriesReq(
@@ -891,8 +935,26 @@ public class Session implements ISession {
     request.setCompressors(compressionOrdinals);
 
     request.setPropsList(propsList);
+    if (tagsList != null) {
+      tagsList =
+          tagsList.stream()
+              .map(value -> value != null ? value : new HashMap<String, String>())
+              .collect(Collectors.toList());
+    }
     request.setTagsList(tagsList);
+    if (attributesList != null) {
+      attributesList =
+          attributesList.stream()
+              .map(value -> value != null ? value : new HashMap<String, String>())
+              .collect(Collectors.toList());
+    }
     request.setAttributesList(attributesList);
+    if (measurementAliasList != null) {
+      measurementAliasList =
+          measurementAliasList.stream()
+              .map(value -> value != null ? value : "")
+              .collect(Collectors.toList());
+    }
     request.setMeasurementAliasList(measurementAliasList);
 
     return request;
@@ -901,7 +963,7 @@ public class Session implements ISession {
   @Override
   public boolean checkTimeseriesExists(String path)
       throws IoTDBConnectionException, StatementExecutionException {
-    return defaultSessionConnection.checkTimeseriesExists(path, queryTimeoutInMs);
+    return getDefaultSessionConnection().checkTimeseriesExists(path, queryTimeoutInMs);
   }
 
   @Override
@@ -957,7 +1019,7 @@ public class Session implements ISession {
       if (enableQueryRedirection) {
         // retry
         try {
-          return defaultSessionConnection.executeQueryStatement(sql, queryTimeoutInMs);
+          return getDefaultSessionConnection().executeQueryStatement(sql, queryTimeoutInMs);
         } catch (RedirectException redirectException) {
           logger.error("{} redirect twice", sql, redirectException);
           throw new StatementExecutionException(sql + " redirect twice, please try again.");
@@ -968,11 +1030,11 @@ public class Session implements ISession {
     }
   }
 
-  private SessionConnection getQuerySessionConnection() {
+  private SessionConnection getQuerySessionConnection() throws IoTDBConnectionException {
     Optional<TEndPoint> endPoint =
         availableNodes == null ? Optional.empty() : availableNodes.getQueryEndPoint();
     if (!endPoint.isPresent() || endPointToSessionConnection == null) {
-      return defaultSessionConnection;
+      return getDefaultSessionConnection();
     }
     SessionConnection connection =
         endPointToSessionConnection.computeIfAbsent(
@@ -984,7 +1046,7 @@ public class Session implements ISession {
                 return null;
               }
             });
-    return connection == null ? defaultSessionConnection : connection;
+    return connection == null ? getDefaultSessionConnection() : connection;
   }
 
   /**
@@ -996,18 +1058,20 @@ public class Session implements ISession {
   public void executeNonQueryStatement(String sql)
       throws IoTDBConnectionException, StatementExecutionException {
     String previousDB = database;
-    defaultSessionConnection.executeNonQueryStatement(sql);
-    if (!Objects.equals(previousDB, database) && endPointToSessionConnection != null) {
+    String previousDialect = sqlDialect;
+    getDefaultSessionConnection().executeNonQueryStatement(sql);
+    if ((!Objects.equals(previousDB, database) || !Objects.equals(previousDialect, sqlDialect))
+        && endPointToSessionConnection != null) {
       Iterator<Map.Entry<TEndPoint, SessionConnection>> iterator =
           endPointToSessionConnection.entrySet().iterator();
       while (iterator.hasNext()) {
         Map.Entry<TEndPoint, SessionConnection> entry = iterator.next();
         SessionConnection sessionConnection = entry.getValue();
-        if (sessionConnection != defaultSessionConnection) {
+        if (sessionConnection != getDefaultSessionConnection()) {
           try {
             sessionConnection.executeNonQueryStatement(sql);
           } catch (Throwable t) {
-            logger.warn("failed to change database for {}", entry.getKey());
+            logger.warn("failed to execute '{}' for {}", sql, entry.getKey());
             iterator.remove();
           }
         }
@@ -1031,13 +1095,14 @@ public class Session implements ISession {
       List<String> paths, long startTime, long endTime, long timeOut)
       throws StatementExecutionException, IoTDBConnectionException {
     try {
-      return defaultSessionConnection.executeRawDataQuery(paths, startTime, endTime, timeOut);
+      return getDefaultSessionConnection().executeRawDataQuery(paths, startTime, endTime, timeOut);
     } catch (RedirectException e) {
       handleQueryRedirection(e.getEndPoint());
       if (enableQueryRedirection) {
         // retry
         try {
-          return defaultSessionConnection.executeRawDataQuery(paths, startTime, endTime, timeOut);
+          return getDefaultSessionConnection()
+              .executeRawDataQuery(paths, startTime, endTime, timeOut);
         } catch (RedirectException redirectException) {
           logger.error(REDIRECT_TWICE, redirectException);
           throw new StatementExecutionException(REDIRECT_TWICE_RETRY);
@@ -1071,13 +1136,13 @@ public class Session implements ISession {
   public SessionDataSet executeLastDataQuery(List<String> paths, long lastTime, long timeOut)
       throws StatementExecutionException, IoTDBConnectionException {
     try {
-      return defaultSessionConnection.executeLastDataQuery(paths, lastTime, timeOut);
+      return getDefaultSessionConnection().executeLastDataQuery(paths, lastTime, timeOut);
     } catch (RedirectException e) {
       handleQueryRedirection(e.getEndPoint());
       if (enableQueryRedirection) {
         // retry
         try {
-          return defaultSessionConnection.executeLastDataQuery(paths, lastTime, timeOut);
+          return getDefaultSessionConnection().executeLastDataQuery(paths, lastTime, timeOut);
         } catch (RedirectException redirectException) {
           logger.error(REDIRECT_TWICE, redirectException);
           throw new StatementExecutionException(REDIRECT_TWICE_RETRY);
@@ -1101,6 +1166,12 @@ public class Session implements ISession {
   }
 
   @Override
+  public SessionDataSet executeFastLastDataQueryForOnePrefixPath(final List<String> prefixes)
+      throws IoTDBConnectionException, StatementExecutionException, RedirectException {
+    return getDefaultSessionConnection().executeLastDataQueryForOnePrefixPath(prefixes);
+  }
+
+  @Override
   public SessionDataSet executeLastDataQueryForOneDevice(
       String db, String device, List<String> sensors, boolean isLegalPathNodes)
       throws StatementExecutionException, IoTDBConnectionException {
@@ -1116,13 +1187,15 @@ public class Session implements ISession {
       return pair.left;
     } catch (IoTDBConnectionException e) {
       if (enableRedirection
+          && deviceIdToEndpoint != null
           && !deviceIdToEndpoint.isEmpty()
           && deviceIdToEndpoint.get(device) != null) {
         logger.warn(SESSION_CANNOT_CONNECT, deviceIdToEndpoint.get(device));
         deviceIdToEndpoint.remove(device);
 
         // reconnect with default connection
-        return defaultSessionConnection.executeLastDataQueryForOneDevice(
+        return getDefaultSessionConnection()
+            .executeLastDataQueryForOneDevice(
                 db, device, sensors, isLegalPathNodes, queryTimeoutInMs)
             .left;
       } else {
@@ -1136,13 +1209,13 @@ public class Session implements ISession {
       List<String> paths, List<TAggregationType> aggregations)
       throws StatementExecutionException, IoTDBConnectionException {
     try {
-      return defaultSessionConnection.executeAggregationQuery(paths, aggregations);
+      return getDefaultSessionConnection().executeAggregationQuery(paths, aggregations);
     } catch (RedirectException e) {
       handleQueryRedirection(e.getEndPoint());
       if (enableQueryRedirection) {
         // retry
         try {
-          return defaultSessionConnection.executeAggregationQuery(paths, aggregations);
+          return getDefaultSessionConnection().executeAggregationQuery(paths, aggregations);
         } catch (RedirectException redirectException) {
           logger.error(REDIRECT_TWICE, redirectException);
           throw new StatementExecutionException(REDIRECT_TWICE_RETRY);
@@ -1158,15 +1231,15 @@ public class Session implements ISession {
       List<String> paths, List<TAggregationType> aggregations, long startTime, long endTime)
       throws StatementExecutionException, IoTDBConnectionException {
     try {
-      return defaultSessionConnection.executeAggregationQuery(
-          paths, aggregations, startTime, endTime);
+      return getDefaultSessionConnection()
+          .executeAggregationQuery(paths, aggregations, startTime, endTime);
     } catch (RedirectException e) {
       handleQueryRedirection(e.getEndPoint());
       if (enableQueryRedirection) {
         // retry
         try {
-          return defaultSessionConnection.executeAggregationQuery(
-              paths, aggregations, startTime, endTime);
+          return getDefaultSessionConnection()
+              .executeAggregationQuery(paths, aggregations, startTime, endTime);
         } catch (RedirectException redirectException) {
           logger.error(REDIRECT_TWICE, redirectException);
           throw new StatementExecutionException(REDIRECT_TWICE_RETRY);
@@ -1186,15 +1259,15 @@ public class Session implements ISession {
       long interval)
       throws StatementExecutionException, IoTDBConnectionException {
     try {
-      return defaultSessionConnection.executeAggregationQuery(
-          paths, aggregations, startTime, endTime, interval);
+      return getDefaultSessionConnection()
+          .executeAggregationQuery(paths, aggregations, startTime, endTime, interval);
     } catch (RedirectException e) {
       handleQueryRedirection(e.getEndPoint());
       if (enableQueryRedirection) {
         // retry
         try {
-          return defaultSessionConnection.executeAggregationQuery(
-              paths, aggregations, startTime, endTime, interval);
+          return getDefaultSessionConnection()
+              .executeAggregationQuery(paths, aggregations, startTime, endTime, interval);
         } catch (RedirectException redirectException) {
           logger.error(REDIRECT_TWICE, redirectException);
           throw new StatementExecutionException(REDIRECT_TWICE_RETRY);
@@ -1215,15 +1288,16 @@ public class Session implements ISession {
       long slidingStep)
       throws StatementExecutionException, IoTDBConnectionException {
     try {
-      return defaultSessionConnection.executeAggregationQuery(
-          paths, aggregations, startTime, endTime, interval, slidingStep);
+      return getDefaultSessionConnection()
+          .executeAggregationQuery(paths, aggregations, startTime, endTime, interval, slidingStep);
     } catch (RedirectException e) {
       handleQueryRedirection(e.getEndPoint());
       if (enableQueryRedirection) {
         // retry
         try {
-          return defaultSessionConnection.executeAggregationQuery(
-              paths, aggregations, startTime, endTime, interval, slidingStep);
+          return getDefaultSessionConnection()
+              .executeAggregationQuery(
+                  paths, aggregations, startTime, endTime, interval, slidingStep);
         } catch (RedirectException redirectException) {
           logger.error(REDIRECT_TWICE, redirectException);
           throw new StatementExecutionException(REDIRECT_TWICE_RETRY);
@@ -1277,7 +1351,7 @@ public class Session implements ISession {
 
         // reconnect with default connection
         try {
-          defaultSessionConnection.insertRecord(request);
+          getDefaultSessionConnection().insertRecord(request);
         } catch (RedirectException ignored) {
         }
       } else {
@@ -1301,7 +1375,7 @@ public class Session implements ISession {
 
         // reconnect with default connection
         try {
-          defaultSessionConnection.insertRecord(request);
+          getDefaultSessionConnection().insertRecord(request);
         } catch (RedirectException ignored) {
         }
       } else {
@@ -1310,19 +1384,21 @@ public class Session implements ISession {
     }
   }
 
-  private SessionConnection getSessionConnection(String deviceId) {
+  private SessionConnection getSessionConnection(String deviceId) throws IoTDBConnectionException {
     TEndPoint endPoint;
     if (enableRedirection
+        && deviceIdToEndpoint != null
         && !deviceIdToEndpoint.isEmpty()
         && (endPoint = deviceIdToEndpoint.get(deviceId)) != null
         && endPointToSessionConnection.containsKey(endPoint)) {
       return endPointToSessionConnection.get(endPoint);
     } else {
-      return defaultSessionConnection;
+      return getDefaultSessionConnection();
     }
   }
 
-  private SessionConnection getSessionConnection(IDeviceID deviceId) {
+  private SessionConnection getSessionConnection(IDeviceID deviceId)
+      throws IoTDBConnectionException {
     TEndPoint endPoint;
     if (enableRedirection
         && tableModelDeviceIdToEndpoint != null
@@ -1330,13 +1406,13 @@ public class Session implements ISession {
         && endPointToSessionConnection.containsKey(endPoint)) {
       return endPointToSessionConnection.get(endPoint);
     } else {
-      return defaultSessionConnection;
+      return getDefaultSessionConnection();
     }
   }
 
   @Override
-  public String getTimestampPrecision() throws TException {
-    return defaultSessionConnection.getClient().getProperties().getTimestampPrecision();
+  public String getTimestampPrecision() throws TException, IoTDBConnectionException {
+    return getDefaultSessionConnection().getClient().getProperties().getTimestampPrecision();
   }
 
   // TODO https://issues.apache.org/jira/browse/IOTDB-1399
@@ -1450,7 +1526,7 @@ public class Session implements ISession {
       if (connection == null) {
         throw new IoTDBConnectionException(exceptionReference.get());
       }
-      defaultSessionConnection = connection;
+      setDefaultSessionConnection(connection);
     }
   }
 
@@ -1539,7 +1615,7 @@ public class Session implements ISession {
     request.setPrefixPath(prefixPath);
     request.setTimestamp(time);
     request.setMeasurements(measurements);
-    ByteBuffer buffer = SessionUtils.getValueBuffer(types, values);
+    ByteBuffer buffer = SessionUtils.getValueBuffer(types, values, measurements);
     request.setValues(buffer);
     request.setIsAligned(isAligned);
     return request;
@@ -1654,7 +1730,7 @@ public class Session implements ISession {
         return;
       }
       try {
-        defaultSessionConnection.insertRecords(request);
+        getDefaultSessionConnection().insertRecords(request);
       } catch (RedirectException ignored) {
       }
     }
@@ -1761,12 +1837,7 @@ public class Session implements ISession {
     return false;
   }
 
-  /**
-   * Filter the null object of list。
-   *
-   * @param prefixPaths devices path。
-   * @return true:all values of valuesList are null;false:Not all values of valuesList are null.
-   */
+  /** Filter the null object of list。 */
   private void filterNullValueAndMeasurementWithStringType(
       List<String> prefixPaths,
       List<Long> times,
@@ -1869,7 +1940,7 @@ public class Session implements ISession {
       }
 
       try {
-        defaultSessionConnection.insertRecords(request);
+        getDefaultSessionConnection().insertRecords(request);
       } catch (RedirectException ignored) {
       }
     }
@@ -2055,7 +2126,7 @@ public class Session implements ISession {
         return;
       }
       try {
-        defaultSessionConnection.insertRecords(request);
+        getDefaultSessionConnection().insertRecords(request);
       } catch (RedirectException ignored) {
       }
     }
@@ -2108,7 +2179,7 @@ public class Session implements ISession {
         return;
       }
       try {
-        defaultSessionConnection.insertRecords(request);
+        getDefaultSessionConnection().insertRecords(request);
       } catch (RedirectException ignored) {
       }
     }
@@ -2178,6 +2249,7 @@ public class Session implements ISession {
       handleRedirection(deviceId, e.getEndPoint());
     } catch (IoTDBConnectionException e) {
       if (enableRedirection
+          && deviceIdToEndpoint != null
           && !deviceIdToEndpoint.isEmpty()
           && deviceIdToEndpoint.get(deviceId) != null) {
         logger.warn(SESSION_CANNOT_CONNECT, deviceIdToEndpoint.get(deviceId));
@@ -2185,7 +2257,7 @@ public class Session implements ISession {
 
         // reconnect with default connection
         try {
-          defaultSessionConnection.insertRecordsOfOneDevice(request);
+          getDefaultSessionConnection().insertRecordsOfOneDevice(request);
         } catch (RedirectException ignored) {
         }
       } else {
@@ -2231,6 +2303,7 @@ public class Session implements ISession {
       handleRedirection(deviceId, e.getEndPoint());
     } catch (IoTDBConnectionException e) {
       if (enableRedirection
+          && deviceIdToEndpoint != null
           && !deviceIdToEndpoint.isEmpty()
           && deviceIdToEndpoint.get(deviceId) != null) {
         logger.warn(SESSION_CANNOT_CONNECT, deviceIdToEndpoint.get(deviceId));
@@ -2238,7 +2311,7 @@ public class Session implements ISession {
 
         // reconnect with default connection
         try {
-          defaultSessionConnection.insertStringRecordsOfOneDevice(req);
+          getDefaultSessionConnection().insertStringRecordsOfOneDevice(req);
         } catch (RedirectException ignored) {
         }
       } else {
@@ -2331,6 +2404,7 @@ public class Session implements ISession {
       handleRedirection(deviceId, e.getEndPoint());
     } catch (IoTDBConnectionException e) {
       if (enableRedirection
+          && deviceIdToEndpoint != null
           && !deviceIdToEndpoint.isEmpty()
           && deviceIdToEndpoint.get(deviceId) != null) {
         logger.warn(SESSION_CANNOT_CONNECT, deviceIdToEndpoint.get(deviceId));
@@ -2338,7 +2412,7 @@ public class Session implements ISession {
 
         // reconnect with default connection
         try {
-          defaultSessionConnection.insertRecordsOfOneDevice(request);
+          getDefaultSessionConnection().insertRecordsOfOneDevice(request);
         } catch (RedirectException ignored) {
         }
       } else {
@@ -2384,6 +2458,7 @@ public class Session implements ISession {
       handleRedirection(deviceId, e.getEndPoint());
     } catch (IoTDBConnectionException e) {
       if (enableRedirection
+          && deviceIdToEndpoint != null
           && !deviceIdToEndpoint.isEmpty()
           && deviceIdToEndpoint.get(deviceId) != null) {
         logger.warn(SESSION_CANNOT_CONNECT, deviceIdToEndpoint.get(deviceId));
@@ -2391,7 +2466,7 @@ public class Session implements ISession {
 
         // reconnect with default connection
         try {
-          defaultSessionConnection.insertStringRecordsOfOneDevice(req);
+          getDefaultSessionConnection().insertStringRecordsOfOneDevice(req);
         } catch (RedirectException ignored) {
         }
       } else {
@@ -2476,7 +2551,8 @@ public class Session implements ISession {
     request.setPrefixPath(prefixPath);
     request.setTimestamps(times);
     request.setMeasurementsList(measurementsList);
-    List<ByteBuffer> buffersList = objectValuesListToByteBufferList(valuesList, typesList);
+    List<ByteBuffer> buffersList =
+        objectValuesListToByteBufferList(valuesList, typesList, measurementsList);
     request.setValuesList(buffersList);
     request.setIsAligned(isAligned);
     return request;
@@ -2550,11 +2626,14 @@ public class Session implements ISession {
   }
 
   private List<ByteBuffer> objectValuesListToByteBufferList(
-      List<List<Object>> valuesList, List<List<TSDataType>> typesList)
+      List<List<Object>> valuesList,
+      List<List<TSDataType>> typesList,
+      List<List<String>> measurementsList)
       throws IoTDBConnectionException {
     List<ByteBuffer> buffersList = new ArrayList<>();
     for (int i = 0; i < valuesList.size(); i++) {
-      ByteBuffer buffer = SessionUtils.getValueBuffer(typesList.get(i), valuesList.get(i));
+      ByteBuffer buffer =
+          SessionUtils.getValueBuffer(typesList.get(i), valuesList.get(i), measurementsList.get(i));
       buffersList.add(buffer);
     }
     return buffersList;
@@ -2630,7 +2709,8 @@ public class Session implements ISession {
     request.setTimestamps(times);
     request.setMeasurementsList(measurementsList);
     request.setIsAligned(isAligned);
-    List<ByteBuffer> buffersList = objectValuesListToByteBufferList(valuesList, typesList);
+    List<ByteBuffer> buffersList =
+        objectValuesListToByteBufferList(valuesList, typesList, measurementsList);
     request.setValuesList(buffersList);
     return request;
   }
@@ -2667,7 +2747,7 @@ public class Session implements ISession {
     request.addToPrefixPaths(deviceId);
     request.addToTimestamps(time);
     request.addToMeasurementsList(measurements);
-    ByteBuffer buffer = SessionUtils.getValueBuffer(types, values);
+    ByteBuffer buffer = SessionUtils.getValueBuffer(types, values, measurements);
     request.addToValuesList(buffer);
   }
 
@@ -2707,6 +2787,7 @@ public class Session implements ISession {
       handleRedirection(tablet.getDeviceId(), e.getEndPoint());
     } catch (IoTDBConnectionException e) {
       if (enableRedirection
+          && deviceIdToEndpoint != null
           && !deviceIdToEndpoint.isEmpty()
           && deviceIdToEndpoint.get(tablet.getDeviceId()) != null) {
         logger.warn(SESSION_CANNOT_CONNECT, deviceIdToEndpoint.get(tablet.getDeviceId()));
@@ -2714,7 +2795,7 @@ public class Session implements ISession {
 
         // reconnect with default connection
         try {
-          defaultSessionConnection.insertTablet(request);
+          getDefaultSessionConnection().insertTablet(request);
         } catch (RedirectException ignored) {
         }
       } else {
@@ -2744,7 +2825,7 @@ public class Session implements ISession {
               .map(t -> (byte) t.ordinal())
               .collect(Collectors.toList()));
       try {
-        defaultSessionConnection.insertTablet(request);
+        getDefaultSessionConnection().insertTablet(request);
       } catch (RedirectException ignored) {
       }
     }
@@ -2754,7 +2835,7 @@ public class Session implements ISession {
       throws IoTDBConnectionException, StatementExecutionException {
     Map<SessionConnection, Tablet> relationalTabletGroup = new HashMap<>();
     if (tableModelDeviceIdToEndpoint.isEmpty()) {
-      relationalTabletGroup.put(defaultSessionConnection, tablet);
+      relationalTabletGroup.put(getDefaultSessionConnection(), tablet);
     } else if (SessionUtils.isTabletContainsSingleDevice(tablet)) {
       relationalTabletGroup.put(getSessionConnection(tablet.getDeviceID(0)), tablet);
     } else {
@@ -2826,7 +2907,7 @@ public class Session implements ISession {
         // remove the broken session
         removeBrokenSessionConnection(connection);
         try {
-          defaultSessionConnection.insertTablet(request);
+          getDefaultSessionConnection().insertTablet(request);
         } catch (RedirectException ignored) {
         }
       } else {
@@ -2873,7 +2954,7 @@ public class Session implements ISession {
                           // remove the broken session
                           removeBrokenSessionConnection(connection);
                           try {
-                            insertConsumer.insert(defaultSessionConnection, request);
+                            insertConsumer.insert(getDefaultSessionConnection(), request);
                           } catch (IoTDBConnectionException | StatementExecutionException ex) {
                             throw new CompletionException(ex);
                           } catch (RedirectException ignored) {
@@ -2938,6 +3019,7 @@ public class Session implements ISession {
       handleRedirection(tablet.getDeviceId(), e.getEndPoint());
     } catch (IoTDBConnectionException e) {
       if (enableRedirection
+          && deviceIdToEndpoint != null
           && !deviceIdToEndpoint.isEmpty()
           && deviceIdToEndpoint.get(tablet.getDeviceId()) != null) {
         logger.warn(SESSION_CANNOT_CONNECT, deviceIdToEndpoint.get(tablet.getDeviceId()));
@@ -2945,7 +3027,7 @@ public class Session implements ISession {
 
         // reconnect with default connection
         try {
-          defaultSessionConnection.insertTablet(request);
+          getDefaultSessionConnection().insertTablet(request);
         } catch (RedirectException ignored) {
         }
       } else {
@@ -2971,8 +3053,51 @@ public class Session implements ISession {
 
     request.setPrefixPath(tablet.getDeviceId());
     request.setIsAligned(isAligned);
-    request.setTimestamps(SessionUtils.getTimeBuffer(tablet));
-    request.setValues(SessionUtils.getValueBuffer(tablet));
+
+    boolean trulyEnableRpcCompression =
+        enableIoTDBRpcCompression && tablet.getRowSize() >= tabletCompressionMinRowSize;
+
+    List<Byte> encodingTypes;
+    if (trulyEnableRpcCompression) {
+      encodingTypes = new ArrayList<>(tablet.getSchemas().size() + 1);
+      encodingTypes.add(
+          this.columnEncodersMap
+              .getOrDefault(
+                  TSDataType.INT64,
+                  TSEncoding.valueOf(TSFileDescriptor.getInstance().getConfig().getTimeEncoder()))
+              .serialize());
+      for (IMeasurementSchema measurementSchema : tablet.getSchemas()) {
+        if (measurementSchema.getMeasurementName() == null) {
+          throw new IllegalArgumentException("measurement should be non null value");
+        }
+        encodingTypes.add(
+            this.columnEncodersMap
+                .getOrDefault(
+                    measurementSchema.getType(),
+                    TSEncoding.valueOf(
+                        TSFileDescriptor.getInstance()
+                            .getConfig()
+                            .getValueEncoder(measurementSchema.getType())))
+                .serialize());
+      }
+    } else {
+      encodingTypes =
+          Collections.nCopies(tablet.getSchemas().size() + 1, TSEncoding.PLAIN.serialize());
+    }
+
+    TabletEncoder encoder =
+        new TabletEncoder(
+            trulyEnableRpcCompression ? this.compressionType : CompressionType.UNCOMPRESSED,
+            encodingTypes.stream().map(TSEncoding::deserialize).collect(Collectors.toList()));
+
+    request.setIsCompressed(trulyEnableRpcCompression);
+    if (trulyEnableRpcCompression) {
+      request.setCompressType(compressionType.serialize());
+      request.setEncodingTypes(encodingTypes);
+    }
+    request.setTimestamps(encoder.encodeTime(tablet));
+    request.setValues(encoder.encodeValues(tablet));
+
     request.setSize(tablet.getRowSize());
     return request;
   }
@@ -3007,7 +3132,7 @@ public class Session implements ISession {
       TSInsertTabletsReq request =
           genTSInsertTabletsReq(new ArrayList<>(tablets.values()), sorted, false);
       try {
-        defaultSessionConnection.insertTablets(request);
+        getDefaultSessionConnection().insertTablets(request);
       } catch (RedirectException ignored) {
       }
     }
@@ -3043,7 +3168,7 @@ public class Session implements ISession {
       TSInsertTabletsReq request =
           genTSInsertTabletsReq(new ArrayList<>(tablets.values()), sorted, true);
       try {
-        defaultSessionConnection.insertTablets(request);
+        getDefaultSessionConnection().insertTablets(request);
       } catch (RedirectException ignored) {
       }
     }
@@ -3317,7 +3442,7 @@ public class Session implements ISession {
   public void testInsertTablet(Tablet tablet, boolean sorted)
       throws IoTDBConnectionException, StatementExecutionException {
     TSInsertTabletReq request = genTSInsertTabletReq(tablet, sorted, false);
-    defaultSessionConnection.testInsertTablet(request);
+    getDefaultSessionConnection().testInsertTablet(request);
   }
 
   /**
@@ -3339,7 +3464,7 @@ public class Session implements ISession {
       throws IoTDBConnectionException, StatementExecutionException {
     TSInsertTabletsReq request =
         genTSInsertTabletsReq(new ArrayList<>(tablets.values()), sorted, false);
-    defaultSessionConnection.testInsertTablets(request);
+    getDefaultSessionConnection().testInsertTablets(request);
   }
 
   /**
@@ -3363,7 +3488,7 @@ public class Session implements ISession {
       return;
     }
 
-    defaultSessionConnection.testInsertRecords(request);
+    getDefaultSessionConnection().testInsertRecords(request);
   }
 
   /**
@@ -3388,7 +3513,7 @@ public class Session implements ISession {
       return;
     }
 
-    defaultSessionConnection.testInsertRecords(request);
+    getDefaultSessionConnection().testInsertRecords(request);
   }
 
   /**
@@ -3406,7 +3531,7 @@ public class Session implements ISession {
       logger.warn(ALL_VALUES_ARE_NULL, deviceId, time, measurements);
       return;
     }
-    defaultSessionConnection.testInsertRecord(request);
+    getDefaultSessionConnection().testInsertRecord(request);
   }
 
   /**
@@ -3428,7 +3553,7 @@ public class Session implements ISession {
       logger.warn(ALL_VALUES_ARE_NULL, deviceId, time, measurements);
       return;
     }
-    defaultSessionConnection.testInsertRecord(request);
+    getDefaultSessionConnection().testInsertRecord(request);
   }
 
   /**
@@ -3439,7 +3564,7 @@ public class Session implements ISession {
   @Override
   public void deleteTimeseries(String path)
       throws IoTDBConnectionException, StatementExecutionException {
-    defaultSessionConnection.deleteTimeseries(Collections.singletonList(path));
+    getDefaultSessionConnection().deleteTimeseries(Collections.singletonList(path));
   }
 
   /**
@@ -3450,7 +3575,7 @@ public class Session implements ISession {
   @Override
   public void deleteTimeseries(List<String> paths)
       throws IoTDBConnectionException, StatementExecutionException {
-    defaultSessionConnection.deleteTimeseries(paths);
+    getDefaultSessionConnection().deleteTimeseries(paths);
   }
 
   /**
@@ -3488,7 +3613,7 @@ public class Session implements ISession {
   public void deleteData(List<String> paths, long startTime, long endTime)
       throws IoTDBConnectionException, StatementExecutionException {
     TSDeleteDataReq request = genTSDeleteDataReq(paths, startTime, endTime);
-    defaultSessionConnection.deleteData(request);
+    getDefaultSessionConnection().deleteData(request);
   }
 
   private TSDeleteDataReq genTSDeleteDataReq(List<String> paths, long startTime, long endTime) {
@@ -3652,7 +3777,7 @@ public class Session implements ISession {
   public void setSchemaTemplate(String templateName, String prefixPath)
       throws IoTDBConnectionException, StatementExecutionException {
     TSSetSchemaTemplateReq request = getTSSetSchemaTemplateReq(templateName, prefixPath);
-    defaultSessionConnection.setSchemaTemplate(request);
+    getDefaultSessionConnection().setSchemaTemplate(request);
   }
 
   /**
@@ -3678,7 +3803,7 @@ public class Session implements ISession {
     template.serialize(baos);
     req.setSerializedTemplate(baos.toByteArray());
     baos.close();
-    defaultSessionConnection.createSchemaTemplate(req);
+    getDefaultSessionConnection().createSchemaTemplate(req);
   }
 
   /**
@@ -3784,7 +3909,7 @@ public class Session implements ISession {
     req.setCompressors(
         compressors.stream().map(i -> (int) i.serialize()).collect(Collectors.toList()));
     req.setIsAligned(true);
-    defaultSessionConnection.appendSchemaTemplate(req);
+    getDefaultSessionConnection().appendSchemaTemplate(req);
   }
 
   /**
@@ -3807,7 +3932,7 @@ public class Session implements ISession {
     req.setEncodings(Collections.singletonList(encoding.ordinal()));
     req.setCompressors(Collections.singletonList((int) compressor.serialize()));
     req.setIsAligned(true);
-    defaultSessionConnection.appendSchemaTemplate(req);
+    getDefaultSessionConnection().appendSchemaTemplate(req);
   }
 
   /**
@@ -3830,7 +3955,7 @@ public class Session implements ISession {
     req.setCompressors(
         compressors.stream().map(i -> (int) i.serialize()).collect(Collectors.toList()));
     req.setIsAligned(false);
-    defaultSessionConnection.appendSchemaTemplate(req);
+    getDefaultSessionConnection().appendSchemaTemplate(req);
   }
 
   /**
@@ -3852,7 +3977,7 @@ public class Session implements ISession {
     req.setEncodings(Collections.singletonList(encoding.ordinal()));
     req.setCompressors(Collections.singletonList((int) compressor.serialize()));
     req.setIsAligned(false);
-    defaultSessionConnection.appendSchemaTemplate(req);
+    getDefaultSessionConnection().appendSchemaTemplate(req);
   }
 
   /**
@@ -3865,7 +3990,7 @@ public class Session implements ISession {
     TSPruneSchemaTemplateReq req = new TSPruneSchemaTemplateReq();
     req.setName(templateName);
     req.setPath(path);
-    defaultSessionConnection.pruneSchemaTemplate(req);
+    getDefaultSessionConnection().pruneSchemaTemplate(req);
   }
 
   /**
@@ -3877,7 +4002,7 @@ public class Session implements ISession {
     TSQueryTemplateReq req = new TSQueryTemplateReq();
     req.setName(name);
     req.setQueryType(TemplateQueryType.COUNT_MEASUREMENTS.ordinal());
-    TSQueryTemplateResp resp = defaultSessionConnection.querySchemaTemplate(req);
+    TSQueryTemplateResp resp = getDefaultSessionConnection().querySchemaTemplate(req);
     return resp.getCount();
   }
 
@@ -3891,7 +4016,7 @@ public class Session implements ISession {
     req.setName(templateName);
     req.setQueryType(TemplateQueryType.IS_MEASUREMENT.ordinal());
     req.setMeasurement(path);
-    TSQueryTemplateResp resp = defaultSessionConnection.querySchemaTemplate(req);
+    TSQueryTemplateResp resp = getDefaultSessionConnection().querySchemaTemplate(req);
     return resp.result;
   }
 
@@ -3905,7 +4030,7 @@ public class Session implements ISession {
     req.setName(templateName);
     req.setQueryType(TemplateQueryType.PATH_EXIST.ordinal());
     req.setMeasurement(path);
-    TSQueryTemplateResp resp = defaultSessionConnection.querySchemaTemplate(req);
+    TSQueryTemplateResp resp = getDefaultSessionConnection().querySchemaTemplate(req);
     return resp.result;
   }
 
@@ -3919,7 +4044,7 @@ public class Session implements ISession {
     req.setName(templateName);
     req.setQueryType(TemplateQueryType.SHOW_MEASUREMENTS.ordinal());
     req.setMeasurement("");
-    TSQueryTemplateResp resp = defaultSessionConnection.querySchemaTemplate(req);
+    TSQueryTemplateResp resp = getDefaultSessionConnection().querySchemaTemplate(req);
     return resp.getMeasurements();
   }
 
@@ -3933,7 +4058,7 @@ public class Session implements ISession {
     req.setName(templateName);
     req.setQueryType(TemplateQueryType.SHOW_MEASUREMENTS.ordinal());
     req.setMeasurement(pattern);
-    TSQueryTemplateResp resp = defaultSessionConnection.querySchemaTemplate(req);
+    TSQueryTemplateResp resp = getDefaultSessionConnection().querySchemaTemplate(req);
     return resp.getMeasurements();
   }
 
@@ -3946,7 +4071,7 @@ public class Session implements ISession {
     TSQueryTemplateReq req = new TSQueryTemplateReq();
     req.setName("");
     req.setQueryType(TemplateQueryType.SHOW_TEMPLATES.ordinal());
-    TSQueryTemplateResp resp = defaultSessionConnection.querySchemaTemplate(req);
+    TSQueryTemplateResp resp = getDefaultSessionConnection().querySchemaTemplate(req);
     return resp.getMeasurements();
   }
 
@@ -3959,7 +4084,7 @@ public class Session implements ISession {
     TSQueryTemplateReq req = new TSQueryTemplateReq();
     req.setName(templateName);
     req.setQueryType(TemplateQueryType.SHOW_SET_TEMPLATES.ordinal());
-    TSQueryTemplateResp resp = defaultSessionConnection.querySchemaTemplate(req);
+    TSQueryTemplateResp resp = getDefaultSessionConnection().querySchemaTemplate(req);
     return resp.getMeasurements();
   }
 
@@ -3972,7 +4097,7 @@ public class Session implements ISession {
     TSQueryTemplateReq req = new TSQueryTemplateReq();
     req.setName(templateName);
     req.setQueryType(TemplateQueryType.SHOW_USING_TEMPLATES.ordinal());
-    TSQueryTemplateResp resp = defaultSessionConnection.querySchemaTemplate(req);
+    TSQueryTemplateResp resp = getDefaultSessionConnection().querySchemaTemplate(req);
     return resp.getMeasurements();
   }
 
@@ -3980,14 +4105,14 @@ public class Session implements ISession {
   public void unsetSchemaTemplate(String prefixPath, String templateName)
       throws IoTDBConnectionException, StatementExecutionException {
     TSUnsetSchemaTemplateReq request = getTSUnsetSchemaTemplateReq(prefixPath, templateName);
-    defaultSessionConnection.unsetSchemaTemplate(request);
+    getDefaultSessionConnection().unsetSchemaTemplate(request);
   }
 
   @Override
   public void dropSchemaTemplate(String templateName)
       throws IoTDBConnectionException, StatementExecutionException {
     TSDropSchemaTemplateReq request = getTSDropSchemaTemplateReq(templateName);
-    defaultSessionConnection.dropSchemaTemplate(request);
+    getDefaultSessionConnection().dropSchemaTemplate(request);
   }
 
   private TSSetSchemaTemplateReq getTSSetSchemaTemplateReq(String templateName, String prefixPath) {
@@ -4025,7 +4150,7 @@ public class Session implements ISession {
     }
     TCreateTimeseriesUsingSchemaTemplateReq request = new TCreateTimeseriesUsingSchemaTemplateReq();
     request.setDevicePathList(devicePathList);
-    defaultSessionConnection.createTimeseriesUsingSchemaTemplate(request);
+    getDefaultSessionConnection().createTimeseriesUsingSchemaTemplate(request);
   }
 
   private <T> void insertOnce(
@@ -4043,7 +4168,7 @@ public class Session implements ISession {
         // remove the broken session
         removeBrokenSessionConnection(connection);
         try {
-          insertConsumer.insert(defaultSessionConnection, insertReq);
+          insertConsumer.insert(getDefaultSessionConnection(), insertReq);
         } catch (RedirectException ignored) {
         }
       } else {
@@ -4086,7 +4211,7 @@ public class Session implements ISession {
                           // remove the broken session
                           removeBrokenSessionConnection(connection);
                           try {
-                            insertConsumer.insert(defaultSessionConnection, insertReq);
+                            insertConsumer.insert(getDefaultSessionConnection(), insertReq);
                           } catch (IoTDBConnectionException | StatementExecutionException ex) {
                             throw new CompletionException(ex);
                           } catch (RedirectException ignored) {
@@ -4142,12 +4267,12 @@ public class Session implements ISession {
   @Override
   public TSBackupConfigurationResp getBackupConfiguration()
       throws IoTDBConnectionException, StatementExecutionException {
-    return defaultSessionConnection.getBackupConfiguration();
+    return getDefaultSessionConnection().getBackupConfiguration();
   }
 
   @Override
   public TSConnectionInfoResp fetchAllConnections() throws IoTDBConnectionException {
-    return defaultSessionConnection.fetchAllConnections();
+    return getDefaultSessionConnection().fetchAllConnections();
   }
 
   protected void changeDatabase(String database) {
@@ -4156,6 +4281,35 @@ public class Session implements ISession {
 
   public String getDatabase() {
     return database;
+  }
+
+  protected void changeSqlDialect(String sqlDialect) {
+    this.sqlDialect = sqlDialect;
+    // clean database to avoid misuse of it between different SqlDialect
+    this.database = null;
+  }
+
+  public String getSqlDialect() {
+    return sqlDialect;
+  }
+
+  protected SessionConnection getDefaultSessionConnection() throws IoTDBConnectionException {
+    if (defaultSessionConnection == null) {
+      throw new IoTDBConnectionException("Session is not open, please invoke Session.open() first");
+    }
+    return defaultSessionConnection;
+  }
+
+  protected void setDefaultSessionConnection(SessionConnection defaultSessionConnection) {
+    this.defaultSessionConnection = defaultSessionConnection;
+  }
+
+  public boolean isEnableThriftRpcCompaction() {
+    return enableThriftRpcCompaction;
+  }
+
+  public void setEnableThriftRpcCompaction(boolean enableThriftRpcCompaction) {
+    this.enableThriftRpcCompaction = enableThriftRpcCompaction;
   }
 
   public static class Builder extends AbstractSessionBuilder {
@@ -4187,6 +4341,16 @@ public class Session implements ISession {
 
     public Builder zoneId(ZoneId zoneId) {
       this.zoneId = zoneId;
+      return this;
+    }
+
+    public Builder enableIoTDBRpcCompression(boolean enabled) {
+      this.isIoTDBRpcCompressionEnabled = enabled;
+      return this;
+    }
+
+    public Builder enableThriftRpcCompression(boolean enabled) {
+      this.isThriftRpcCompactionEnabled = enabled;
       return this;
     }
 

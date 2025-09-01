@@ -178,4 +178,34 @@ public interface ISubscriptionTreePullConsumer extends AutoCloseable {
    */
   void commitAsync(
       final Iterable<SubscriptionMessage> messages, final AsyncCommitCallback callback);
+
+  /**
+   * Retrieves the unique identifier of this consumer. If no consumer ID was provided at the time of
+   * consumer construction, a random globally unique ID is automatically assigned after the consumer
+   * is opened.
+   *
+   * @return the unique consumer identifier
+   */
+  String getConsumerId();
+
+  /**
+   * Retrieves the identifier of the consumer group to which this consumer belongs. If no consumer
+   * group ID was specified at the time of consumer construction, a random globally unique ID is
+   * automatically assigned after the consumer is opened.
+   *
+   * @return the consumer group's identifier
+   */
+  String getConsumerGroupId();
+
+  /**
+   * Checks whether all topic messages have been consumed.
+   *
+   * <p>This method is used by the pull consumer in a loop that retrieves messages to determine if
+   * all messages for the subscription have been processed. It ensures that the consumer can
+   * correctly detect the termination signal for the subscription once all messages have been
+   * consumed.
+   *
+   * @return true if all topic messages have been consumed, false otherwise.
+   */
+  boolean allTopicMessagesHaveBeenConsumed();
 }

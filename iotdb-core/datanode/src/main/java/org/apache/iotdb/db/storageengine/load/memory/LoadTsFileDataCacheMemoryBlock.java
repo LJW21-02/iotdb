@@ -59,22 +59,21 @@ public class LoadTsFileDataCacheMemoryBlock extends LoadTsFileAbstractMemoryBloc
 
   @Override
   public synchronized void addMemoryUsage(long memoryInBytes) {
+    // May temporarily exceed the max size
     if (memoryUsageInBytes.addAndGet(memoryInBytes) > limitedMemorySizeInBytes.get()) {
-      LOGGER.warn("{} has exceed total memory size", this);
+      LOGGER.debug("{} has exceed total memory size", this);
     }
   }
 
   @Override
   public synchronized void reduceMemoryUsage(long memoryInBytes) {
-    if (memoryUsageInBytes.addAndGet(-memoryInBytes) < 0) {
-      LOGGER.warn("{} has reduce memory usage to negative", this);
-    }
+    memoryUsageInBytes.addAndGet(-memoryInBytes);
   }
 
   @Override
   public synchronized void forceResize(long newSizeInBytes) {
     throw new UnsupportedOperationException(
-        "resize is not supported for LoadTsFileDataCacheMemoryBlock");
+        "setTotalMemorySizeInBytes is not supported for LoadTsFileDataCacheMemoryBlock");
   }
 
   @Override
@@ -97,11 +96,11 @@ public class LoadTsFileDataCacheMemoryBlock extends LoadTsFileAbstractMemoryBloc
       return true;
     }
 
-    if (limitedMemorySizeInBytes.get() - shrinkMemoryInBytes <= MINIMUM_MEMORY_SIZE_IN_BYTES) {
+    if (limitedMemorySizeInBytes.get() - shrinkMemoryInBytes
+        <= Math.max(MINIMUM_MEMORY_SIZE_IN_BYTES, memoryUsageInBytes.get())) {
       return false;
     }
 
-    MEMORY_MANAGER.releaseToQuery(shrinkMemoryInBytes);
     limitedMemorySizeInBytes.addAndGet(-shrinkMemoryInBytes);
     return true;
   }
@@ -128,7 +127,7 @@ public class LoadTsFileDataCacheMemoryBlock extends LoadTsFileAbstractMemoryBloc
     return "LoadTsFileDataCacheMemoryBlock{"
         + "limitedMemorySizeInBytes="
         + limitedMemorySizeInBytes.get()
-        + ", memoryUsageInBytes="
+        + ", usedMemoryInBytes="
         + memoryUsageInBytes.get()
         + '}';
   }

@@ -104,6 +104,7 @@ public class IoTDBPipeDoubleLivingIT extends AbstractPipeTableModelDualManualIT 
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult =
           client.showPipe(new TShowPipeReq().setIsTableModel(true)).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(0, showPipeResult.size());
     }
   }
@@ -124,18 +125,23 @@ public class IoTDBPipeDoubleLivingIT extends AbstractPipeTableModelDualManualIT 
         };
 
     // insertion on sender
-    for (int i = 0; i < 100; ++i) {
-      if (!TestUtils.tryExecuteNonQueryWithRetry(
-          senderEnv, String.format("insert into root.db.d1(time, s1) values (%s, 1)", i))) {
-        return;
+    try (Connection conn = senderEnv.getConnection()) {
+      for (int i = 0; i < 100; ++i) {
+        if (!TestUtils.tryExecuteNonQueryWithRetry(
+            senderEnv, String.format("insert into root.db.d1(time, s1) values (%s, 1)", i), conn)) {
+          return;
+        }
       }
+    } catch (SQLException e) {
+      throw new RuntimeException(e);
     }
+
     TableModelUtils.createDataBaseAndTable(senderEnv, "test", "test");
     insertResult = TableModelUtils.insertData("test", "test", 0, 100, senderEnv);
     if (!insertResult) {
       return;
     }
-    if (!TestUtils.tryExecuteNonQueryWithRetry(senderEnv, "flush")) {
+    if (!TestUtils.tryExecuteNonQueryWithRetry(senderEnv, "flush", null)) {
       return;
     }
 
@@ -158,19 +164,26 @@ public class IoTDBPipeDoubleLivingIT extends AbstractPipeTableModelDualManualIT 
       fail(e.getMessage());
     }
 
-    // insertion on sender
-    for (int i = 100; i < 200; ++i) {
-      if (!TestUtils.tryExecuteNonQueryWithRetry(
-          senderEnv, String.format("insert into root.db.d1(time, s1) values (%s, 1)", i))) {
-        return;
+    try (Connection conn = senderEnv.getConnection()) {
+      // insertion on sender
+      for (int i = 100; i < 200; ++i) {
+        if (!TestUtils.tryExecuteNonQueryWithRetry(
+            senderEnv, String.format("insert into root.db.d1(time, s1) values (%s, 1)", i), conn)) {
+          return;
+        }
       }
-    }
-    for (int i = 200; i < 300; ++i) {
-      if (!TestUtils.tryExecuteNonQueryWithRetry(
-          receiverEnv, String.format("insert into root.db.d1(time, s1) values (%s, 1)", i))) {
-        return;
+      for (int i = 200; i < 300; ++i) {
+        if (!TestUtils.tryExecuteNonQueryWithRetry(
+            receiverEnv,
+            String.format("insert into root.db.d1(time, s1) values (%s, 1)", i),
+            conn)) {
+          return;
+        }
       }
+    } catch (SQLException e) {
+      throw new RuntimeException(e);
     }
+
     insertResult = TableModelUtils.insertData("test", "test", 100, 200, senderEnv);
     if (!insertResult) {
       return;
@@ -179,7 +192,7 @@ public class IoTDBPipeDoubleLivingIT extends AbstractPipeTableModelDualManualIT 
     if (!insertResult) {
       return;
     }
-    if (!TestUtils.tryExecuteNonQueryWithRetry(senderEnv, "flush")) {
+    if (!TestUtils.tryExecuteNonQueryWithRetry(senderEnv, "flush", null)) {
       return;
     }
 
@@ -202,18 +215,25 @@ public class IoTDBPipeDoubleLivingIT extends AbstractPipeTableModelDualManualIT 
       fail(e.getMessage());
     }
 
-    // insertion on receiver
-    for (int i = 300; i < 400; ++i) {
-      if (!TestUtils.tryExecuteNonQueryWithRetry(
-          receiverEnv, String.format("insert into root.db.d1(time, s1) values (%s, 1)", i))) {
-        return;
+    try (Connection conn = receiverEnv.getConnection()) {
+      // insertion on receiver
+      for (int i = 300; i < 400; ++i) {
+        if (!TestUtils.tryExecuteNonQueryWithRetry(
+            receiverEnv,
+            String.format("insert into root.db.d1(time, s1) values (%s, 1)", i),
+            conn)) {
+          return;
+        }
       }
+    } catch (SQLException e) {
+      throw new RuntimeException(e);
     }
+
     insertResult = TableModelUtils.insertData("test", "test", 300, 400, receiverEnv);
     if (!insertResult) {
       return;
     }
-    if (!TestUtils.tryExecuteNonQueryWithRetry(receiverEnv, "flush")) {
+    if (!TestUtils.tryExecuteNonQueryWithRetry(receiverEnv, "flush", null)) {
       return;
     }
 
@@ -223,9 +243,9 @@ public class IoTDBPipeDoubleLivingIT extends AbstractPipeTableModelDualManualIT 
       expectedResSet.add(i + ",1.0,");
     }
     TestUtils.assertDataEventuallyOnEnv(
-        senderEnv, "select * from root.**", "Time,root.db.d1.s1,", expectedResSet);
+        senderEnv, "select * from root.db.**", "Time,root.db.d1.s1,", expectedResSet);
     TestUtils.assertDataEventuallyOnEnv(
-        receiverEnv, "select * from root.**", "Time,root.db.d1.s1,", expectedResSet);
+        receiverEnv, "select * from root.db.**", "Time,root.db.d1.s1,", expectedResSet);
     TableModelUtils.assertData("test", "test", 0, 400, senderEnv, handleFailure);
     TableModelUtils.assertData("test", "test", 0, 400, receiverEnv, handleFailure);
 
@@ -238,18 +258,25 @@ public class IoTDBPipeDoubleLivingIT extends AbstractPipeTableModelDualManualIT 
       return;
     }
 
-    // insertion on receiver
-    for (int i = 400; i < 500; ++i) {
-      if (!TestUtils.tryExecuteNonQueryWithRetry(
-          receiverEnv, String.format("insert into root.db.d1(time, s1) values (%s, 1)", i))) {
-        return;
+    try (Connection conn = receiverEnv.getConnection()) {
+      // insertion on receiver
+      for (int i = 400; i < 500; ++i) {
+        if (!TestUtils.tryExecuteNonQueryWithRetry(
+            receiverEnv,
+            String.format("insert into root.db.d1(time, s1) values (%s, 1)", i),
+            conn)) {
+          return;
+        }
       }
+    } catch (SQLException e) {
+      throw new RuntimeException(e);
     }
+
     insertResult = TableModelUtils.insertData("test", "test", 400, 500, receiverEnv);
     if (!insertResult) {
       return;
     }
-    if (!TestUtils.tryExecuteNonQueryWithRetry(receiverEnv, "flush")) {
+    if (!TestUtils.tryExecuteNonQueryWithRetry(receiverEnv, "flush", null)) {
       return;
     }
 
@@ -258,9 +285,9 @@ public class IoTDBPipeDoubleLivingIT extends AbstractPipeTableModelDualManualIT 
       expectedResSet.add(i + ",1.0,");
     }
     TestUtils.assertDataEventuallyOnEnv(
-        senderEnv, "select * from root.**", "Time,root.db.d1.s1,", expectedResSet);
+        senderEnv, "select * from root.db.**", "Time,root.db.d1.s1,", expectedResSet);
     TestUtils.assertDataEventuallyOnEnv(
-        receiverEnv, "select * from root.**", "Time,root.db.d1.s1,", expectedResSet);
+        receiverEnv, "select * from root.db.**", "Time,root.db.d1.s1,", expectedResSet);
     TableModelUtils.assertData("test", "test", 0, 500, senderEnv, handleFailure);
     TableModelUtils.assertData("test", "test", 0, 500, receiverEnv, handleFailure);
   }

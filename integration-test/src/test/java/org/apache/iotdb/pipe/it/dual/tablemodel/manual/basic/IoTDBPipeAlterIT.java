@@ -52,9 +52,10 @@ public class IoTDBPipeAlterIT extends AbstractPipeTableModelDualManualIT {
     final DataNodeWrapper receiverDataNode = receiverEnv.getDataNodeWrapper(0);
 
     // Create pipe
+    // The database & table name will be converted to lower case
     final String sql =
         String.format(
-            "create pipe a2b with source ('source'='iotdb-source', 'database-name'='test', 'table-name'='test1', 'mode.streaming'='true') with processor ('processor'='do-nothing-processor') with sink ('node-urls'='%s')",
+            "create pipe a2b with source ('source'='iotdb-source', 'database-name'='Test', 'table-name'='Test1', 'mode.streaming'='true') with processor ('processor'='do-nothing-processor') with sink ('node-urls'='%s')",
             receiverDataNode.getIpAndPortString());
     try (final Connection connection = senderEnv.getConnection(BaseEnv.TABLE_SQL_DIALECT);
         final Statement statement = connection.createStatement()) {
@@ -69,6 +70,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeTableModelDualManualIT {
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult =
           client.showPipe(new TShowPipeReq().setIsTableModel(true)).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // Check status
       Assert.assertEquals("RUNNING", showPipeResult.get(0).state);
@@ -101,16 +103,18 @@ public class IoTDBPipeAlterIT extends AbstractPipeTableModelDualManualIT {
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult =
           client.showPipe(new TShowPipeReq().setIsTableModel(true)).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // Check status
       Assert.assertEquals("STOPPED", showPipeResult.get(0).state);
     }
 
     // Alter pipe (modify)
+    // The database & table name will be converted to lower case
     try (final Connection connection = senderEnv.getConnection(BaseEnv.TABLE_SQL_DIALECT);
         final Statement statement = connection.createStatement()) {
       statement.execute(
-          "alter pipe a2b modify source ('table-name'='test1','database-name'='test1')");
+          "alter pipe a2b modify source ('table-name'='Test1','database-name'='Test1')");
     } catch (SQLException e) {
       fail(e.getMessage());
     }
@@ -120,6 +124,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeTableModelDualManualIT {
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult =
           client.showPipe(new TShowPipeReq().setIsTableModel(true)).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // Check status
       Assert.assertEquals("STOPPED", showPipeResult.get(0).state);
@@ -156,6 +161,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeTableModelDualManualIT {
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult =
           client.showPipe(new TShowPipeReq().setIsTableModel(true)).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // check status
       Assert.assertEquals("STOPPED", showPipeResult.get(0).state);
@@ -191,6 +197,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeTableModelDualManualIT {
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult =
           client.showPipe(new TShowPipeReq().setIsTableModel(true)).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // Check status
       Assert.assertEquals("STOPPED", showPipeResult.get(0).state);
@@ -234,6 +241,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeTableModelDualManualIT {
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult =
           client.showPipe(new TShowPipeReq().setIsTableModel(true)).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // Check status
       Assert.assertEquals("RUNNING", showPipeResult.get(0).state);
@@ -267,6 +275,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeTableModelDualManualIT {
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult =
           client.showPipe(new TShowPipeReq().setIsTableModel(true)).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // check status
       Assert.assertEquals("RUNNING", showPipeResult.get(0).state);
@@ -300,6 +309,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeTableModelDualManualIT {
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult =
           client.showPipe(new TShowPipeReq().setIsTableModel(true)).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // check status
       Assert.assertEquals("RUNNING", showPipeResult.get(0).state);
@@ -335,6 +345,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeTableModelDualManualIT {
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult =
           client.showPipe(new TShowPipeReq().setIsTableModel(true)).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // check status
       Assert.assertEquals("RUNNING", showPipeResult.get(0).state);
@@ -367,6 +378,7 @@ public class IoTDBPipeAlterIT extends AbstractPipeTableModelDualManualIT {
         (SyncConfigNodeIServiceClient) senderEnv.getLeaderConfigNodeConnection()) {
       final List<TShowPipeInfo> showPipeResult =
           client.showPipe(new TShowPipeReq().setIsTableModel(true)).pipeInfoList;
+      showPipeResult.removeIf(i -> i.getId().startsWith("__consensus"));
       Assert.assertEquals(1, showPipeResult.size());
       // Check status
       Assert.assertEquals("RUNNING", showPipeResult.get(0).state);

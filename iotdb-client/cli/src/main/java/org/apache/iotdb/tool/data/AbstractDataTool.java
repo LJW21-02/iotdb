@@ -45,11 +45,11 @@ import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.thrift.annotation.Nullable;
 import org.apache.tsfile.common.constant.TsFileConstant;
+import org.apache.tsfile.enums.ColumnCategory;
 import org.apache.tsfile.enums.TSDataType;
 import org.apache.tsfile.read.common.Field;
 import org.apache.tsfile.read.common.RowRecord;
 import org.apache.tsfile.utils.Binary;
-import org.apache.tsfile.write.record.Tablet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -90,8 +90,9 @@ public abstract class AbstractDataTool {
   protected static String database;
   protected static String startTime;
   protected static int threadNum = 8;
+  protected static int rpcMaxFrameSize = 536870912;
   protected static String targetPath;
-  protected static long timeout = -1;
+  protected static long timeout = Long.MAX_VALUE;
   protected static String timeZoneID;
   protected static String timeFormat;
   protected static String exportType;
@@ -114,6 +115,7 @@ public abstract class AbstractDataTool {
   protected static ZoneId zoneId = ZoneId.systemDefault();
   protected static ImportTsFileOperation successOperation;
   protected static String targetFile = Constants.DUMP_FILE_NAME_DEFAULT;
+  protected static final int updateTimeInterval = 2000;
   protected static final LongAdder loadFileFailedNum = new LongAdder();
   protected static final LongAdder loadFileSuccessfulNum = new LongAdder();
   protected static final LongAdder processingLoadFailedFileSuccessfulNum = new LongAdder();
@@ -301,6 +303,8 @@ public abstract class AbstractDataTool {
     }
     if (isBoolean(strValue)) {
       return Constants.TYPE_INFER_KEY_DICT.get(Constants.DATATYPE_BOOLEAN);
+    } else if (isTimeStamp(strValue)) {
+      return Constants.TYPE_INFER_KEY_DICT.get(Constants.DATATYPE_TIMESTAMP);
     } else if (isNumber(strValue)) {
       if (!strValue.contains(TsFileConstant.PATH_SEPARATOR)) {
         if (isConvertFloatPrecisionLack(StringUtils.trim(strValue))) {
@@ -316,6 +320,8 @@ public abstract class AbstractDataTool {
       // "NaN" is returned if the NaN Literal is given in Parser
     } else if (Constants.DATATYPE_NAN.equals(strValue)) {
       return Constants.TYPE_INFER_KEY_DICT.get(Constants.DATATYPE_NAN);
+    } else if (isDate(strValue)) {
+      return Constants.TYPE_INFER_KEY_DICT.get(Constants.DATATYPE_DATE);
     } else if (isBlob(strValue)) {
       return Constants.TYPE_INFER_KEY_DICT.get(Constants.DATATYPE_BLOB);
     } else if (strValue.length() <= 512) {
@@ -323,6 +329,14 @@ public abstract class AbstractDataTool {
     } else {
       return TEXT;
     }
+  }
+
+  private static boolean isDate(String s) {
+    return s.equalsIgnoreCase(Constants.DATATYPE_DATE);
+  }
+
+  private static boolean isTimeStamp(String s) {
+    return s.equalsIgnoreCase(Constants.DATATYPE_TIMESTAMP);
   }
 
   static boolean isNumber(String s) {
@@ -430,10 +444,10 @@ public abstract class AbstractDataTool {
    * @param typeStr
    * @return
    */
-  protected static Tablet.ColumnCategory getColumnCategory(String typeStr) {
+  protected static ColumnCategory getColumnCategory(String typeStr) {
     if (StringUtils.isNotBlank(typeStr)) {
       try {
-        return Tablet.ColumnCategory.valueOf(typeStr);
+        return ColumnCategory.valueOf(typeStr);
       } catch (Exception e) {
         return null;
       }

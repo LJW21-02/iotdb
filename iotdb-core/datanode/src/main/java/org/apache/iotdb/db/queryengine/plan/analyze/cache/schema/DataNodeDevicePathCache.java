@@ -20,8 +20,10 @@
 package org.apache.iotdb.db.queryengine.plan.analyze.cache.schema;
 
 import org.apache.iotdb.commons.exception.IllegalPathException;
+import org.apache.iotdb.commons.memory.IMemoryBlock;
+import org.apache.iotdb.commons.memory.MemoryBlockType;
 import org.apache.iotdb.commons.path.PartialPath;
-import org.apache.iotdb.db.conf.IoTDBConfig;
+import org.apache.iotdb.db.conf.DataNodeMemoryConfig;
 import org.apache.iotdb.db.conf.IoTDBDescriptor;
 
 import com.github.benmanes.caffeine.cache.Cache;
@@ -31,18 +33,22 @@ import com.github.benmanes.caffeine.cache.Weigher;
 /** This cache is for reducing duplicated DeviceId PartialPath initialization in write process. */
 public class DataNodeDevicePathCache {
 
-  private static final IoTDBConfig config = IoTDBDescriptor.getInstance().getConfig();
+  private static final DataNodeMemoryConfig memoryConfig =
+      IoTDBDescriptor.getInstance().getMemoryConfig();
+  private final IMemoryBlock devicePathCacheMemoryBlock;
 
   private final Cache<String, PartialPath> devicePathCache;
 
   private DataNodeDevicePathCache() {
+    devicePathCacheMemoryBlock =
+        memoryConfig
+            .getDevicePathCacheMemoryManager()
+            .exactAllocate("DevicePathCache", MemoryBlockType.STATIC);
+    // TODO @spricoder: later we can find a way to get the byte size of cache
+    devicePathCacheMemoryBlock.allocate(devicePathCacheMemoryBlock.getTotalMemorySizeInBytes());
     devicePathCache =
         Caffeine.newBuilder()
-            .maximumWeight(
-                (long)
-                    (config.getAllocateMemoryForStorageEngine()
-                        * config.getWriteProportionForMemtable()
-                        * config.getDevicePathCacheProportion()))
+            .maximumWeight(devicePathCacheMemoryBlock.getTotalMemorySizeInBytes())
             .weigher(
                 (Weigher<String, PartialPath>) (key, val) -> (PartialPath.estimateSize(val) + 32))
             .build();

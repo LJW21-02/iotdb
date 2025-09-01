@@ -33,7 +33,7 @@ import org.apache.iotdb.db.pipe.event.common.tablet.parser.TabletInsertionEventP
 import org.apache.iotdb.db.pipe.event.common.tablet.parser.TabletInsertionEventTablePatternParser;
 import org.apache.iotdb.db.pipe.event.common.tablet.parser.TabletInsertionEventTreePatternParser;
 import org.apache.iotdb.db.pipe.event.common.tsfile.PipeTsFileInsertionEvent;
-import org.apache.iotdb.db.pipe.metric.PipeDataNodeRemainingEventAndTimeMetrics;
+import org.apache.iotdb.db.pipe.metric.overview.PipeDataNodeSinglePipeMetrics;
 import org.apache.iotdb.db.pipe.resource.PipeDataNodeResourceManager;
 import org.apache.iotdb.db.pipe.resource.memory.PipeMemoryWeightUtil;
 import org.apache.iotdb.db.pipe.resource.memory.PipeTabletMemoryBlock;
@@ -50,7 +50,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 
 public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
-    implements TabletInsertionEvent, ReferenceTrackableEvent {
+    implements TabletInsertionEvent, ReferenceTrackableEvent, AutoCloseable {
 
   // For better calculation
   private static final long INSTANCE_SIZE =
@@ -62,7 +62,7 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
   private final EnrichedEvent sourceEvent;
   private boolean needToReport;
 
-  private PipeTabletMemoryBlock allocatedMemoryBlock;
+  private final PipeTabletMemoryBlock allocatedMemoryBlock;
 
   private TabletInsertionEventParser eventParser;
 
@@ -71,6 +71,8 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
   private PipeRawTabletInsertionEvent(
       final Boolean isTableModelEvent,
       final String databaseName,
+      final String tableModelDataBaseName,
+      final String treeModelDataBaseName,
       final Tablet tablet,
       final boolean isAligned,
       final EnrichedEvent sourceEvent,
@@ -80,6 +82,8 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
       final PipeTaskMeta pipeTaskMeta,
       final TreePattern treePattern,
       final TablePattern tablePattern,
+      final String userName,
+      final boolean skipIfNoPrivileges,
       final long startTime,
       final long endTime) {
     super(
@@ -88,19 +92,36 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
         pipeTaskMeta,
         treePattern,
         tablePattern,
+        userName,
+        skipIfNoPrivileges,
         startTime,
         endTime,
         isTableModelEvent,
-        databaseName);
+        databaseName,
+        tableModelDataBaseName,
+        treeModelDataBaseName);
     this.tablet = Objects.requireNonNull(tablet);
     this.isAligned = isAligned;
     this.sourceEvent = sourceEvent;
     this.needToReport = needToReport;
+
+    // Allocate empty memory block, will be resized later.
+    this.allocatedMemoryBlock =
+        PipeDataNodeResourceManager.memory().forceAllocateForTabletWithRetry(0);
+
+    addOnCommittedHook(
+        () -> {
+          if (shouldReportOnCommit) {
+            eliminateProgressIndex();
+          }
+        });
   }
 
   public PipeRawTabletInsertionEvent(
       final Boolean isTableModelEvent,
       final String databaseName,
+      final String tableModelDataBaseName,
+      final String treeModelDataBaseName,
       final Tablet tablet,
       final boolean isAligned,
       final String pipeName,
@@ -111,6 +132,8 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
     this(
         isTableModelEvent,
         databaseName,
+        tableModelDataBaseName,
+        treeModelDataBaseName,
         tablet,
         isAligned,
         sourceEvent,
@@ -120,6 +143,41 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
         pipeTaskMeta,
         null,
         null,
+        null,
+        true,
+        Long.MIN_VALUE,
+        Long.MAX_VALUE);
+  }
+
+  public PipeRawTabletInsertionEvent(
+      final Boolean isTableModelEvent,
+      final String databaseName,
+      final String tableModelDataBaseName,
+      final String treeModelDataBaseName,
+      final Tablet tablet,
+      final boolean isAligned,
+      final String pipeName,
+      final long creationTime,
+      final PipeTaskMeta pipeTaskMeta,
+      final EnrichedEvent sourceEvent,
+      final boolean needToReport,
+      final String userName) {
+    this(
+        isTableModelEvent,
+        databaseName,
+        tableModelDataBaseName,
+        treeModelDataBaseName,
+        tablet,
+        isAligned,
+        sourceEvent,
+        needToReport,
+        pipeName,
+        creationTime,
+        pipeTaskMeta,
+        null,
+        null,
+        userName,
+        true,
         Long.MIN_VALUE,
         Long.MAX_VALUE);
   }
@@ -127,6 +185,8 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
   @TestOnly
   public PipeRawTabletInsertionEvent(final Tablet tablet, final boolean isAligned) {
     this(
+        null,
+        null,
         null,
         null,
         tablet,
@@ -138,6 +198,8 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
         null,
         null,
         null,
+        null,
+        true,
         Long.MIN_VALUE,
         Long.MAX_VALUE);
   }
@@ -146,6 +208,8 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
   public PipeRawTabletInsertionEvent(
       final Tablet tablet, final boolean isAligned, final TreePattern treePattern) {
     this(
+        null,
+        null,
         null,
         null,
         tablet,
@@ -157,6 +221,8 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
         null,
         treePattern,
         null,
+        null,
+        true,
         Long.MIN_VALUE,
         Long.MAX_VALUE);
   }
@@ -164,18 +230,20 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
   @TestOnly
   public PipeRawTabletInsertionEvent(
       final Tablet tablet, final long startTime, final long endTime) {
-    this(null, null, tablet, false, null, false, null, 0, null, null, null, startTime, endTime);
+    this(
+        null, null, null, null, tablet, false, null, false, null, 0, null, null, null, null, true,
+        startTime, endTime);
   }
 
   @Override
   public boolean internallyIncreaseResourceReferenceCount(final String holderMessage) {
-    allocatedMemoryBlock =
-        PipeDataNodeResourceManager.memory()
-            .forceAllocateForTabletWithRetry(
-                PipeMemoryWeightUtil.calculateTabletSizeInBytes(tablet) + INSTANCE_SIZE);
+    PipeDataNodeResourceManager.memory()
+        .forceResize(
+            allocatedMemoryBlock,
+            PipeMemoryWeightUtil.calculateTabletSizeInBytes(tablet) + INSTANCE_SIZE);
     if (Objects.nonNull(pipeName)) {
-      PipeDataNodeRemainingEventAndTimeMetrics.getInstance()
-          .increaseTabletEventCount(pipeName, creationTime);
+      PipeDataNodeSinglePipeMetrics.getInstance()
+          .increaseRawTabletEventCount(pipeName, creationTime);
     }
     return true;
   }
@@ -183,8 +251,8 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
   @Override
   public boolean internallyDecreaseResourceReferenceCount(final String holderMessage) {
     if (Objects.nonNull(pipeName)) {
-      PipeDataNodeRemainingEventAndTimeMetrics.getInstance()
-          .decreaseTabletEventCount(pipeName, creationTime);
+      PipeDataNodeSinglePipeMetrics.getInstance()
+          .decreaseRawTabletEventCount(pipeName, creationTime);
     }
     allocatedMemoryBlock.close();
 
@@ -198,10 +266,8 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
     return true;
   }
 
-  @Override
-  protected void reportProgress() {
+  protected void eliminateProgressIndex() {
     if (needToReport) {
-      super.reportProgress();
       if (sourceEvent instanceof PipeTsFileInsertionEvent) {
         ((PipeTsFileInsertionEvent) sourceEvent).eliminateProgressIndex();
       }
@@ -236,11 +302,15 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
       final PipeTaskMeta pipeTaskMeta,
       final TreePattern treePattern,
       final TablePattern tablePattern,
+      final String userName,
+      final boolean skipIfNoPrivileges,
       final long startTime,
       final long endTime) {
     return new PipeRawTabletInsertionEvent(
         getRawIsTableModelEvent(),
-        getTreeModelDatabaseName(),
+        getSourceDatabaseNameFromDataRegion(),
+        getRawTableModelDataBase(),
+        getRawTreeModelDataBase(),
         tablet,
         isAligned,
         sourceEvent,
@@ -250,6 +320,8 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
         pipeTaskMeta,
         treePattern,
         tablePattern,
+        userName,
+        skipIfNoPrivileges,
         startTime,
         endTime);
   }
@@ -276,6 +348,11 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
 
   public void markAsNeedToReport() {
     this.needToReport = true;
+  }
+
+  // This getter is reserved for user-defined plugins
+  public boolean isNeedToReport() {
+    return needToReport;
   }
 
   public String getDeviceId() {
@@ -329,8 +406,8 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
   }
 
   public long count() {
-    final Tablet covertedTablet = shouldParseTimeOrPattern() ? convertToTablet() : tablet;
-    return (long) covertedTablet.getRowSize() * covertedTablet.getSchemas().size();
+    final Tablet convertedTablet = shouldParseTimeOrPattern() ? convertToTablet() : tablet;
+    return (long) convertedTablet.getRowSize() * convertedTablet.getSchemas().size();
   }
 
   /////////////////////////// parsePatternOrTime ///////////////////////////
@@ -338,7 +415,9 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
   public PipeRawTabletInsertionEvent parseEventWithPatternOrTime() {
     return new PipeRawTabletInsertionEvent(
         getRawIsTableModelEvent(),
-        getTreeModelDatabaseName(),
+        getSourceDatabaseNameFromDataRegion(),
+        getRawTableModelDataBase(),
+        getRawTreeModelDataBase(),
         convertToTablet(),
         isAligned,
         pipeName,
@@ -412,5 +491,17 @@ public class PipeRawTabletInsertionEvent extends PipeInsertionEvent
     protected void finalizeResource() {
       allocatedMemoryBlock.close();
     }
+  }
+
+  /////////////////////////// AutoCloseable ///////////////////////////
+
+  @Override
+  public void close() {
+    // The semantic of close is to release the memory occupied by parsing, this method does nothing
+    // to unify the external close semantic:
+    //   1. PipeRawTabletInsertionEvent: the tablet occupying memory upon construction, even when
+    // parsing is involved.
+    //   2. PipeInsertNodeTabletInsertionEvent: the tablet is only constructed when it's actually
+    // involved in parsing.
   }
 }

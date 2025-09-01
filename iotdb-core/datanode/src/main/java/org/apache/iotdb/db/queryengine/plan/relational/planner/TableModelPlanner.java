@@ -57,7 +57,6 @@ import org.apache.iotdb.rpc.TSStatusCode;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 
 public class TableModelPlanner implements IPlanner {
@@ -75,8 +74,6 @@ public class TableModelPlanner implements IPlanner {
 
   private final WarningCollector warningCollector = WarningCollector.NOOP;
 
-  private final ExecutorService executor;
-  private final ExecutorService writeOperationExecutor;
   private final ScheduledExecutorService scheduledExecutor;
 
   private final IClientManager<TEndPoint, SyncDataNodeInternalServiceClient>
@@ -91,8 +88,6 @@ public class TableModelPlanner implements IPlanner {
       final Statement statement,
       final SqlParser sqlParser,
       final Metadata metadata,
-      final ExecutorService executor,
-      final ExecutorService writeOperationExecutor,
       final ScheduledExecutorService scheduledExecutor,
       final IClientManager<TEndPoint, SyncDataNodeInternalServiceClient>
           syncInternalServiceClientManager,
@@ -106,8 +101,6 @@ public class TableModelPlanner implements IPlanner {
     this.statement = statement;
     this.sqlParser = sqlParser;
     this.metadata = metadata;
-    this.executor = executor;
-    this.writeOperationExecutor = writeOperationExecutor;
     this.scheduledExecutor = scheduledExecutor;
     this.syncInternalServiceClientManager = syncInternalServiceClientManager;
     this.asyncInternalServiceClientManager = asyncInternalServiceClientManager;
@@ -181,10 +174,8 @@ public class TableModelPlanner implements IPlanner {
           new ClusterScheduler(
               context,
               stateMachine,
-              distributedPlan.getInstances(),
+              distributedPlan,
               context.getQueryType(),
-              executor,
-              writeOperationExecutor,
               scheduledExecutor,
               syncInternalServiceClientManager,
               asyncInternalServiceClientManager);

@@ -36,11 +36,9 @@ public interface CommonConfig {
 
   CommonConfig setCompressor(String compressor);
 
-  CommonConfig setEncryptFlag(boolean encryptFlag);
-
   CommonConfig setEncryptType(String encryptType);
 
-  CommonConfig setEncryptKeyPath(String encryptKeyPath);
+  CommonConfig setEnableGrantOption(boolean enableGrantOption);
 
   CommonConfig setConfigRegionRatisRPCLeaderElectionTimeoutMaxMs(int maxMs);
 
@@ -124,6 +122,8 @@ public interface CommonConfig {
 
   CommonConfig setSeriesSlotNum(int seriesSlotNum);
 
+  CommonConfig setDataPartitionAllocationStrategy(String dataPartitionAllocationStrategy);
+
   CommonConfig setSeriesPartitionExecutorClass(String seriesPartitionExecutorClass);
 
   CommonConfig setSchemaMemoryAllocate(String schemaMemoryAllocate);
@@ -145,6 +145,10 @@ public interface CommonConfig {
   CommonConfig setDataRegionPerDataNode(double dataRegionPerDataNode);
 
   CommonConfig setSchemaRegionPerDataNode(double schemaRegionPerDataNode);
+
+  CommonConfig setPipeMemoryManagementEnabled(boolean pipeMemoryManagementEnabled);
+
+  CommonConfig setIsPipeEnableMemoryCheck(boolean isPipeEnableMemoryCheck);
 
   CommonConfig setPipeAirGapReceiverEnabled(boolean isPipeAirGapReceiverEnabled);
 
@@ -168,7 +172,21 @@ public interface CommonConfig {
 
   CommonConfig setQueryMemoryProportion(String queryMemoryProportion);
 
+  CommonConfig setDataNodeMemoryProportion(String dataNodeMemoryProportion);
+
+  CommonConfig setSubscriptionPrefetchTsFileBatchMaxDelayInMs(
+      int subscriptionPrefetchTsFileBatchMaxDelayInMs);
+
+  CommonConfig setSubscriptionPrefetchTsFileBatchMaxSizeInBytes(
+      int subscriptionPrefetchTsFileBatchMaxSizeInBytes);
+
+  CommonConfig setSubscriptionEnabled(boolean subscriptionEnabled);
+
   default CommonConfig setDefaultStorageGroupLevel(int defaultStorageGroupLevel) {
     return this;
   }
+
+  CommonConfig setEnforceStrongPassword(boolean enforceStrongPassword);
+
+  CommonConfig setDatanodeMemoryProportion(String datanodeMemoryProportion);
 }

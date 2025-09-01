@@ -63,10 +63,10 @@ public class CrossSpaceCompactionSelectorTest extends AbstractCompactionTest {
   public void tearDown() throws IOException, StorageEngineException {
     super.tearDown();
     for (TsFileResource tsFileResource : seqResources) {
-      FileReaderManager.getInstance().closeFileAndRemoveReader(tsFileResource.getTsFilePath());
+      FileReaderManager.getInstance().closeFileAndRemoveReader(tsFileResource.getTsFileID());
     }
     for (TsFileResource tsFileResource : unseqResources) {
-      FileReaderManager.getInstance().closeFileAndRemoveReader(tsFileResource.getTsFilePath());
+      FileReaderManager.getInstance().closeFileAndRemoveReader(tsFileResource.getTsFileID());
     }
   }
 
@@ -192,7 +192,7 @@ public class CrossSpaceCompactionSelectorTest extends AbstractCompactionTest {
     int oldMaxFileNumForCompaction = SystemInfo.getInstance().getTotalFileLimitForCompaction();
     SystemInfo.getInstance().setTotalFileLimitForCompactionTask(1);
     SystemInfo.getInstance().getCompactionFileNumCost().set(0);
-    SystemInfo.getInstance().getCompactionMemoryCost().set(0);
+    SystemInfo.getInstance().getCompactionMemoryBlock().setUsedMemoryInBytes(0);
     try {
       createFiles(19, 2, 3, 50, 0, 10000, 50, 50, false, true);
       createFiles(1, 2, 3, 3000, 0, 10000, 50, 50, false, false);
@@ -233,7 +233,8 @@ public class CrossSpaceCompactionSelectorTest extends AbstractCompactionTest {
               });
       thread.start();
       thread.join(TimeUnit.SECONDS.toMillis(2));
-      Assert.assertEquals(0, SystemInfo.getInstance().getCompactionMemoryCost().get());
+      Assert.assertEquals(
+          0, SystemInfo.getInstance().getCompactionMemoryBlock().getUsedMemoryInBytes());
       Assert.assertEquals(0, SystemInfo.getInstance().getCompactionFileNumCost().get());
       for (TsFileResource resource : seqResources) {
         Assert.assertEquals(TsFileResourceStatus.NORMAL, resource.getStatus());

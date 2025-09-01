@@ -60,8 +60,10 @@ keyWords
     | CLEAR
     | CLUSTER
     | CLUSTERID
+    | COMMENT
     | CONCAT
     | CONDITION
+    | CONFIGNODE
     | CONFIGNODES
     | CONFIGURATION
     | CONNECTION
@@ -73,6 +75,8 @@ keyWords
     | CQ
     | CQS
     | CREATE
+    | CURRENT_SQL_DIALECT
+    | CURRENT_USER
     | DATA
     | DATA_REPLICATION_FACTOR
     | DATA_REGION_GROUP_NUM
@@ -84,6 +88,7 @@ keyWords
     | DATASET
     | DEACTIVATE
     | DEBUG
+    | DEFAULT
     | DELETE
     | DESC
     | DESCRIBE
@@ -102,6 +107,7 @@ keyWords
     | EXPLAIN
     | EXTRACTOR
     | FALSE
+    | FIELD
     | FILL
     | FILE
     | FIRST
@@ -195,6 +201,7 @@ keyWords
     | RESOURCE
     | REPAIR
     | REPLACE
+    | RESTRICT
     | REVOKE
     | ROLE
     | ROUND
@@ -214,6 +221,7 @@ keyWords
     | SOFFSET
     | SOURCE
     | SPACE
+    | SQL_DIALECT
     | STORAGE
     | START
     | STARTTIME
@@ -221,9 +229,12 @@ keyWords
     | STATELESS
     | STATEMENT
     | STOP
+    | SUBSCRIPTION
     | SUBSCRIPTIONS
     | SUBSTRING
     | SYSTEM
+    | TABLE
+    | TAG
     | TAGS
     | TAIL
     | TASK
@@ -242,6 +253,7 @@ keyWords
     | TOPIC
     | TOPICS
     | TRACING
+    | TREE
     | TRIGGER
     | TRIGGERS
     | TRUE

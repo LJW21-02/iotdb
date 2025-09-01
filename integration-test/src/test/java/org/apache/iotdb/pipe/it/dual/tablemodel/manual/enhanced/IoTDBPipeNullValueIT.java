@@ -82,6 +82,7 @@ public class IoTDBPipeNullValueIT extends AbstractPipeTableModelDualManualIT {
 
       extractorAttributes.put("capture.table", "true");
       extractorAttributes.put("realtime-mode", realtime);
+      extractorAttributes.put("user", "root");
       if (withParsing) {
         extractorAttributes.put("start-time", "150");
         extractorAttributes.put("end-time", "249");

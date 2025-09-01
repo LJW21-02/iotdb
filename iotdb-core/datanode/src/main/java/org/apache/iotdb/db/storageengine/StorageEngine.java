@@ -22,6 +22,7 @@ import org.apache.iotdb.common.rpc.thrift.TFlushReq;
 import org.apache.iotdb.common.rpc.thrift.TSStatus;
 import org.apache.iotdb.common.rpc.thrift.TSetConfigurationReq;
 import org.apache.iotdb.common.rpc.thrift.TSetTTLReq;
+import org.apache.iotdb.common.rpc.thrift.TTimePartitionSlot;
 import org.apache.iotdb.commons.concurrent.ExceptionalCountDownLatch;
 import org.apache.iotdb.commons.concurrent.IoTDBThreadPoolFactory;
 import org.apache.iotdb.commons.concurrent.ThreadName;
@@ -52,6 +53,7 @@ import org.apache.iotdb.db.exception.TsFileProcessorException;
 import org.apache.iotdb.db.exception.WriteProcessRejectException;
 import org.apache.iotdb.db.exception.load.LoadReadOnlyException;
 import org.apache.iotdb.db.exception.runtime.StorageEngineFailureException;
+import org.apache.iotdb.db.pipe.agent.PipeDataNodeAgent;
 import org.apache.iotdb.db.queryengine.plan.analyze.cache.schema.DataNodeTTLCache;
 import org.apache.iotdb.db.queryengine.plan.planner.plan.node.load.LoadTsFilePieceNode;
 import org.apache.iotdb.db.queryengine.plan.scheduler.load.LoadTsFileScheduler;
@@ -79,6 +81,7 @@ import org.apache.iotdb.rpc.RpcUtils;
 import org.apache.iotdb.rpc.TSStatusCode;
 
 import org.apache.commons.io.FileUtils;
+import org.apache.tsfile.exception.write.PageException;
 import org.apache.tsfile.utils.FilePathUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -522,6 +525,21 @@ public class StorageEngine implements IService {
     checkResults(tasks, "Failed to sync close processor.");
   }
 
+  public void syncCloseProcessorsInRegion(List<String> dataRegionIds) {
+    List<Future<Void>> tasks = new ArrayList<>();
+    for (DataRegion dataRegion : dataRegionMap.values()) {
+      if (dataRegion != null && dataRegionIds.contains(dataRegion.getDataRegionId())) {
+        tasks.add(
+            cachedThreadPool.submit(
+                () -> {
+                  dataRegion.syncCloseAllWorkingTsFileProcessors();
+                  return null;
+                }));
+      }
+    }
+    checkResults(tasks, "Failed to sync close processor.");
+  }
+
   public void syncCloseProcessorsInDatabase(String databaseName, boolean isSeq) {
     List<Future<Void>> tasks = new ArrayList<>();
     for (DataRegion dataRegion : dataRegionMap.values()) {
@@ -630,7 +648,9 @@ public class StorageEngine implements IService {
   }
 
   public void operateFlush(TFlushReq req) {
-    if (req.storageGroups == null || req.storageGroups.isEmpty()) {
+    if (req.getRegionIds() != null && !req.getRegionIds().isEmpty()) {
+      StorageEngine.getInstance().syncCloseProcessorsInRegion(req.getRegionIds());
+    } else if (req.storageGroups == null || req.storageGroups.isEmpty()) {
       StorageEngine.getInstance().syncCloseAllProcessor();
       WALManager.getInstance().syncDeleteOutdatedFilesInWALNodes();
     } else {
@@ -755,6 +775,8 @@ public class StorageEngine implements IService {
         region.abortCompaction();
         region.syncDeleteDataFiles();
         region.deleteFolder(systemDir);
+        region.deleteDALFolderAndClose();
+        PipeDataNodeAgent.receiver().pipeConsensus().releaseReceiverResource(regionId);
         switch (CONFIG.getDataRegionConsensusProtocolClass()) {
           case ConsensusFactory.IOT_CONSENSUS:
           case ConsensusFactory.IOT_CONSENSUS_V2:
@@ -855,6 +877,10 @@ public class StorageEngine implements IService {
     return new ArrayList<>(dataRegionMap.keySet());
   }
 
+  public int getDataRegionNumber() {
+    return dataRegionMap.size();
+  }
+
   /** This method is not thread-safe */
   public void setDataRegion(DataRegionId regionId, DataRegion newRegion) {
     if (dataRegionMap.containsKey(regionId)) {
@@ -910,11 +936,30 @@ public class StorageEngine implements IService {
 
     LoadTsFileRateLimiter.getInstance().acquire(pieceNode.getDataSize());
 
+    final DataRegion dataRegion = getDataRegion(dataRegionId);
+    if (dataRegion == null) {
+      LOGGER.warn(
+          "DataRegion {} not found on this DataNode when writing piece node"
+              + "of TsFile {} (maybe due to region migration), will skip.",
+          dataRegionId,
+          pieceNode.getTsFile());
+      return RpcUtils.SUCCESS_STATUS;
+    }
+
     try {
-      loadTsFileManager.writeToDataRegion(getDataRegion(dataRegionId), pieceNode, uuid);
-    } catch (IOException e) {
-      LOGGER.error(
+      loadTsFileManager.writeToDataRegion(dataRegion, pieceNode, uuid);
+    } catch (IOException | PageException e) {
+      LOGGER.warn(
           "IO error when writing piece node of TsFile {} to DataRegion {}.",
+          pieceNode.getTsFile(),
+          dataRegionId,
+          e);
+      status.setCode(TSStatusCode.LOAD_FILE_ERROR.getStatusCode());
+      status.setMessage(e.getMessage());
+      return status;
+    } catch (Exception e) {
+      LOGGER.warn(
+          "Exception occurred when writing piece node of TsFile {} to DataRegion {}.",
           pieceNode.getTsFile(),
           dataRegionId,
           e);
@@ -930,13 +975,13 @@ public class StorageEngine implements IService {
       LoadTsFileScheduler.LoadCommand loadCommand,
       String uuid,
       boolean isGeneratedByPipe,
-      ProgressIndex progressIndex) {
+      Map<TTimePartitionSlot, ProgressIndex> timePartitionProgressIndexMap) {
     TSStatus status = new TSStatus();
 
     try {
       switch (loadCommand) {
         case EXECUTE:
-          if (loadTsFileManager.loadAll(uuid, isGeneratedByPipe, progressIndex)) {
+          if (loadTsFileManager.loadAll(uuid, isGeneratedByPipe, timePartitionProgressIndexMap)) {
             status = RpcUtils.SUCCESS_STATUS;
           } else {
             status.setCode(TSStatusCode.LOAD_FILE_ERROR.getStatusCode());
