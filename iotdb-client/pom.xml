@@ -34,6 +34,7 @@
         <module>client-py</module>
         <module>isession</module>
         <module>jdbc</module>
+        <module>r2dbc</module>
         <module>service-rpc</module>
         <module>session</module>
         <module>subscription</module>
