@@ -669,16 +669,21 @@ public final class IoTDBConnection implements Connection, Lifecycle {
 
   @Override
   public Publisher<Boolean> validate(ValidationDepth depth) {
-    if (!open.get()) {
-      return Mono.just(false);
-    }
-    if (depth == ValidationDepth.LOCAL) {
-      return Mono.just(true);
-    }
-    return call(client -> client.getProperties())
-        .map(properties -> true)
-        .onErrorResume(error -> Mono.just(false))
-        .defaultIfEmpty(false);
+    // The state is read when the returned publisher is subscribed, not when it is created, so a
+    // validation created before close() correctly reports a closed connection.
+    return Mono.defer(
+        () -> {
+          if (!open.get()) {
+            return Mono.just(false);
+          }
+          if (depth == ValidationDepth.LOCAL) {
+            return Mono.just(true);
+          }
+          return call(client -> client.getProperties())
+              .map(properties -> true)
+              .onErrorResume(error -> Mono.just(false))
+              .defaultIfEmpty(false);
+        });
   }
 
   @Override

@@ -19,8 +19,6 @@
 
 package org.apache.iotdb.r2dbc.codec;
 
-import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
-
 import io.r2dbc.spi.Parameters;
 import org.junit.Test;
 
@@ -90,7 +88,7 @@ public class ParameterBindingTest {
     assertEquals(Types.BIGINT, wrappedTemporal.jdbcType());
 
     assertThrows(
-        IoTDBR2dbcException.class, () -> ParameterBinding.of(Parameters.out(Integer.class)));
+        IllegalArgumentException.class, () -> ParameterBinding.of(Parameters.out(Integer.class)));
   }
 
   @Test
@@ -100,15 +98,16 @@ public class ParameterBindingTest {
 
   @Test
   public void rejectsUnsupportedValueAndDeclaredTypes() {
-    assertThrows(IoTDBR2dbcException.class, () -> ParameterBinding.of(LocalDate.of(2026, 9, 22)));
-    assertThrows(IoTDBR2dbcException.class, () -> ParameterBinding.of(new byte[] {1, 2}));
-    assertThrows(IoTDBR2dbcException.class, () -> ParameterBinding.nullOf(LocalDate.class));
+    assertThrows(
+        IllegalArgumentException.class, () -> ParameterBinding.of(LocalDate.of(2026, 9, 22)));
+    assertThrows(IllegalArgumentException.class, () -> ParameterBinding.of(new byte[] {1, 2}));
+    assertThrows(IllegalArgumentException.class, () -> ParameterBinding.nullOf(LocalDate.class));
     assertThrows(IllegalArgumentException.class, () -> ParameterBinding.nullOf(null));
   }
 
   @Test
   public void rejectsNaNAsLiteral() {
-    assertThrows(IoTDBR2dbcException.class, () -> literal(ParameterBinding.of(Double.NaN)));
+    assertThrows(IllegalArgumentException.class, () -> literal(ParameterBinding.of(Double.NaN)));
   }
 
   private static String literal(ParameterBinding binding) {

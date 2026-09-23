@@ -35,6 +35,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.NoSuchElementException;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -65,7 +66,6 @@ public class IoTDBRowTest {
     IoTDBRow row = row(0, UTC, 1_000, new int[] {0, 1, 2, 3, 4, 5});
     assertEquals(Integer.valueOf(7), row.get("v1", Integer.class));
     assertEquals("hello", row.get("V2", String.class));
-    assertThrows(IoTDBR2dbcException.class, () -> row.get("missing", String.class));
   }
 
   @Test
@@ -133,7 +133,8 @@ public class IoTDBRowTest {
   @Test
   public void rejectsOutOfBoundsAndUnsupportedConversions() {
     IoTDBRow row = row(0, UTC, 1_000, new int[] {0, 1, 2, 3, 4, 5});
-    assertThrows(IoTDBR2dbcException.class, () -> row.get(6));
+    assertThrows(IndexOutOfBoundsException.class, () -> row.get(6));
+    assertThrows(NoSuchElementException.class, () -> row.get("missing", String.class));
     assertThrows(IoTDBR2dbcException.class, () -> row.get(0, String.class));
     assertThrows(IoTDBR2dbcException.class, () -> row.get(5, String.class));
     assertThrows(IllegalArgumentException.class, () -> row.get(0, null));

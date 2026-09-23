@@ -142,6 +142,15 @@ documented, while the explicit client executes a parameterised query and returns
 Values bound by frameworks arrive as `io.r2dbc.spi.Parameter`; the driver unwraps them, and a typed
 null becomes a `bindNull` for the declared type.
 
+## R2DBC TCK
+
+The driver runs the official R2DBC TCK against a live instance; the per-test outcome and the
+documented differences (transactions and update counts) are recorded in [TCK.md](TCK.md):
+
+```bash
+mvn test -pl iotdb-client/r2dbc -P with-r2dbc-tck -Dtest=IoTDBR2dbcTckTest -DfailIfNoTests=false     -Diotdb.it.host=127.0.0.1 -Diotdb.it.port=6667     -Diotdb.it.user=<user> -Diotdb.it.password=<password>
+```
+
 ## Follow-up work
 
 TLS, Snappy, multi-node redirection, `DATE` parameter semantics, the R2DBC TCK profile and long

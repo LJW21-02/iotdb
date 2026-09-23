@@ -24,6 +24,8 @@ public final class R2dbcMessages {
 
   private R2dbcMessages() {}
 
+  public static final String EXCEPTION_PARAMETERS_CANNOT_BE_BOUND_TO_A_STATEMENT_THAT_CONTAINS_SEVERAL_SQL_STATEMENTS_89D234C0 = "包含多条 SQL 语句的 Statement 不能绑定参数";
+
   public static final String EXCEPTION_TEMPORAL_PARAMETERS_MUST_BE_CONVERTED_WITH_THE_SESSION_PRECISION_AND_TIME_ZONE_BEFORE_BINDING_90DAA184 = "时间类型参数必须先按会话精度和时区转换后再绑定";
   public static final String EXCEPTION_LOCAL_DATE_TIME_ARG_IS_AMBIGUOUS_OR_INVALID_IN_TIME_ZONE_ARG_665B6E7F = "本地时间 %s 在时区 %s 下存在歧义或非法";
 

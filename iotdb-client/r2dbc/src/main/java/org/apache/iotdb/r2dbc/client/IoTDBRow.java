@@ -37,6 +37,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Arrays;
+import java.util.NoSuchElementException;
 
 /**
  * A row backed by the {@link TsBlock} of the current page.
@@ -91,7 +92,7 @@ public final class IoTDBRow implements Row {
     }
     Integer index = metadata.index(name);
     if (index == null) {
-      throw new IoTDBR2dbcException(
+      throw new NoSuchElementException(
           String.format(R2dbcMessages.EXCEPTION_COLUMN_ARG_DOES_NOT_EXIST_FF67AE82, name));
     }
     return get(index, type);
@@ -99,7 +100,7 @@ public final class IoTDBRow implements Row {
 
   private Object read(int index, Class<?> requestedType) {
     if (index < 0 || index >= columnTypes.length) {
-      throw new IoTDBR2dbcException(
+      throw new IndexOutOfBoundsException(
           String.format(
               R2dbcMessages
                   .EXCEPTION_COLUMN_INDEX_ARG_IS_OUT_OF_BOUNDS_THE_ROW_HAS_ARG_COLUMN_S_98C75AD7,

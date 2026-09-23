@@ -22,6 +22,7 @@ package org.apache.iotdb.r2dbc.codec;
 import org.apache.iotdb.r2dbc.R2dbcMessages;
 import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -74,6 +75,63 @@ public final class LiteralBinder {
               parameters.size()));
     }
     return bound.toString();
+  }
+
+  /**
+   * Splits a SQL string on top level semicolons.
+   *
+   * <p>Strings, quoted identifiers and comments are copied verbatim, so a semicolon inside them
+   * does not start a new statement. Empty statements are dropped.
+   */
+  public static List<String> splitStatements(String sql) {
+    List<String> statements = new ArrayList<>();
+    StringBuilder current = new StringBuilder();
+    int index = 0;
+    while (index < sql.length()) {
+      char character = sql.charAt(index);
+      switch (character) {
+        case '\'':
+          index = copyQuoted(sql, index, current, '\'', true);
+          break;
+        case '"':
+        case '`':
+          index = copyQuoted(sql, index, current, character, false);
+          break;
+        case '-':
+          if (index + 1 < sql.length() && sql.charAt(index + 1) == '-') {
+            index = copyLineComment(sql, index, current);
+          } else {
+            current.append(character);
+            index++;
+          }
+          break;
+        case '/':
+          if (index + 1 < sql.length() && sql.charAt(index + 1) == '*') {
+            index = copyBlockComment(sql, index, current);
+          } else {
+            current.append(character);
+            index++;
+          }
+          break;
+        case ';':
+          addStatement(statements, current);
+          current.setLength(0);
+          index++;
+          break;
+        default:
+          current.append(character);
+          index++;
+      }
+    }
+    addStatement(statements, current);
+    return statements;
+  }
+
+  private static void addStatement(List<String> statements, StringBuilder statement) {
+    String text = statement.toString().trim();
+    if (!text.isEmpty()) {
+      statements.add(text);
+    }
   }
 
   private static int scan(String sql, StringBuilder output, PlaceholderWriter writer) {

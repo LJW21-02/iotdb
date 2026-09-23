@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 
 /**
  * A statement executed by one connection.
@@ -62,6 +63,9 @@ public final class IoTDBStatement implements Statement {
 
   @Override
   public Statement add() {
+    if (bindingSets.get(currentBindingSet).size() < placeholders) {
+      throw new IllegalStateException(R2dbcMessages.EXCEPTION_PARAMETER_ARG_IS_NOT_BOUND_F893971C);
+    }
     bindingSets.add(new LinkedHashMap<>());
     currentBindingSet = bindingSets.size() - 1;
     return this;
@@ -76,7 +80,8 @@ public final class IoTDBStatement implements Statement {
 
   @Override
   public Statement bind(String name, Object value) {
-    throw new UnsupportedOperationException(
+    requireKnownName(name);
+    throw new NoSuchElementException(
         R2dbcMessages
             .EXCEPTION_NAMED_PARAMETERS_ARE_NOT_SUPPORTED_USE_POSITIONAL_PLACEHOLDERS_A7D827BE);
   }
@@ -90,9 +95,18 @@ public final class IoTDBStatement implements Statement {
 
   @Override
   public Statement bindNull(String name, Class<?> type) {
-    throw new UnsupportedOperationException(
+    requireKnownName(name);
+    throw new NoSuchElementException(
         R2dbcMessages
             .EXCEPTION_NAMED_PARAMETERS_ARE_NOT_SUPPORTED_USE_POSITIONAL_PLACEHOLDERS_A7D827BE);
+  }
+
+  private static void requireKnownName(String name) {
+    if (name == null) {
+      throw new IllegalArgumentException(
+          R2dbcMessages
+              .EXCEPTION_BIND_REQUIRES_A_NON_NULL_VALUE_USE_BINDNULL_FOR_SQL_NULL_57886CDE);
+    }
   }
 
   @Override
@@ -115,8 +129,18 @@ public final class IoTDBStatement implements Statement {
   @Override
   public Publisher<? extends Result> execute() {
     List<List<ParameterBinding>> executionParameters = snapshotParameters();
+    List<String> statements = LiteralBinder.splitStatements(sql);
+    if (statements.size() > 1 && placeholders > 0) {
+      throw new IoTDBR2dbcException(
+          R2dbcMessages
+              .EXCEPTION_PARAMETERS_CANNOT_BE_BOUND_TO_A_STATEMENT_THAT_CONTAINS_SEVERAL_SQL_STATEMENTS_89D234C0);
+    }
+    // A statement with several SQL texts produces one result per text, in order.
     return Flux.fromIterable(executionParameters)
-        .concatMap(bindings -> connection.execute(sql, bindings, fetchSize));
+        .concatMap(
+            bindings ->
+                Flux.fromIterable(statements)
+                    .concatMap(statement -> connection.execute(statement, bindings, fetchSize)));
   }
 
   private List<List<ParameterBinding>> snapshotParameters() {
@@ -126,7 +150,7 @@ public final class IoTDBStatement implements Statement {
       for (int index = 0; index < placeholders; index++) {
         ParameterBinding binding = bindings.get(index);
         if (binding == null) {
-          throw new IoTDBR2dbcException(
+          throw new IllegalStateException(
               String.format(R2dbcMessages.EXCEPTION_PARAMETER_ARG_IS_NOT_BOUND_F893971C, index));
         }
         ordered.add(binding);

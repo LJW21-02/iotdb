@@ -20,7 +20,6 @@
 package org.apache.iotdb.r2dbc.client;
 
 import org.apache.iotdb.r2dbc.R2dbcMessages;
-import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
 
 import io.r2dbc.spi.ColumnMetadata;
 import io.r2dbc.spi.RowMetadata;
@@ -32,6 +31,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.NoSuchElementException;
 
 /** Immutable row description shared by every row of one result. */
 public final class IoTDBRowMetadata implements RowMetadata {
@@ -69,7 +69,7 @@ public final class IoTDBRowMetadata implements RowMetadata {
   public ColumnMetadata getColumnMetadata(String name) {
     Integer index = index(name);
     if (index == null) {
-      throw new IoTDBR2dbcException(
+      throw new NoSuchElementException(
           String.format(R2dbcMessages.EXCEPTION_COLUMN_ARG_DOES_NOT_EXIST_FF67AE82, name));
     }
     return columns.get(index);

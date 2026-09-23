@@ -165,7 +165,7 @@ public final class ParameterBinding {
     if (value instanceof Float || value instanceof Double) {
       double number = ((Number) value).doubleValue();
       if (Double.isNaN(number) || Double.isInfinite(number)) {
-        throw new IoTDBR2dbcException(
+        throw new IllegalArgumentException(
             R2dbcMessages
                 .EXCEPTION_NAN_AND_INFINITY_ARE_NOT_SUPPORTED_AS_STATEMENT_PARAMETERS_AE049503);
       }
@@ -210,8 +210,8 @@ public final class ParameterBinding {
     throw unsupported(type);
   }
 
-  private static IoTDBR2dbcException unsupported(Class<?> type) {
-    return new IoTDBR2dbcException(
+  private static IllegalArgumentException unsupported(Class<?> type) {
+    return new IllegalArgumentException(
         String.format(
             R2dbcMessages
                 .EXCEPTION_VALUES_OF_TYPE_ARG_ARE_NOT_SUPPORTED_AS_STATEMENT_PARAMETERS_F4A3A5F4,

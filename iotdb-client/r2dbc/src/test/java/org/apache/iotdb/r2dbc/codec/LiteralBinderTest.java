@@ -84,6 +84,17 @@ public class LiteralBinderTest {
   }
 
   @Test
+  public void splitsCompoundStatementsOnTopLevelSemicolons() {
+    assertEquals(
+        List.of("SELECT 1", "SELECT 2"), LiteralBinder.splitStatements("SELECT 1; SELECT 2"));
+    assertEquals(
+        List.of("SELECT ';' AS value"), LiteralBinder.splitStatements("SELECT ';' AS value"));
+    assertEquals(List.of("SELECT /* ; */ 1"), LiteralBinder.splitStatements("SELECT /* ; */ 1"));
+    assertEquals(List.of("SELECT 1"), LiteralBinder.splitStatements("SELECT 1;   ;"));
+    assertEquals(List.of(), LiteralBinder.splitStatements(" ; "));
+  }
+
+  @Test
   public void rejectsPlaceholderAndParameterCountMismatch() {
     assertThrows(
         IoTDBR2dbcException.class,
