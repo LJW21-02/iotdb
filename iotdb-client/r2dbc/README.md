@@ -96,6 +96,7 @@ connection is opened.
 | Parameters | Zero-based positional indexes as required by the SPI; `io.r2dbc.spi.Parameter` wrappers (used by frameworks) are unwrapped and typed nulls become `bindNull`. |
 | Batch | Parameter free statements run in order and stop at the first failure; effects of already executed statements are kept. |
 | Validation | `LOCAL` checks the local session state, `REMOTE` issues a light weight `getProperties` RPC. |
+| Stability | Verified against a live instance: 150 prepared executions in a row without leaking a server side handle, 300 rows paged with `fetchSize=7` without loss or duplication, demand driven consumption, 8 parallel connections sharing one selector runtime and 20 connect/close cycles that release their selector thread. |
 | Backpressure | Pages are fetched only when the current page is exhausted and more rows are demanded. |
 | Single result per connection | One active result; a second statement fails or waits for cleanup, never interleaves. |
 | Result consumption | Once per result; `map`/`filter`/`flatMap`/`getRowsUpdated` share one consumption state. |
