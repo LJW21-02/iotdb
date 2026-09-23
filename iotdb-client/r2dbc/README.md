@@ -93,6 +93,9 @@ connection is opened.
 | `DATE` parameters | Not supported: this server version rejects both `DATE < STRING` and `DATE < INT32` comparisons, so binding a `LocalDate` fails at bind time instead of being sent. Rows of a `DATE` column are decoded with the TsFile date encoding. |
 | Connection pool | Verified with `r2dbc-pool` 1.0.2: borrow, `LOCAL` validation, release, lifecycle reset and reuse of the same connection. |
 | Prepared statements | One server side handle per execution; a statement that fails after prepare is deallocated, so the next execution cannot collide with a leaked handle. |
+| Parameters | Zero-based positional indexes as required by the SPI; `io.r2dbc.spi.Parameter` wrappers (used by frameworks) are unwrapped and typed nulls become `bindNull`. |
+| Batch | Parameter free statements run in order and stop at the first failure; effects of already executed statements are kept. |
+| Validation | `LOCAL` checks the local session state, `REMOTE` issues a light weight `getProperties` RPC. |
 | Backpressure | Pages are fetched only when the current page is exhausted and more rows are demanded. |
 | Single result per connection | One active result; a second statement fails or waits for cleanup, never interleaves. |
 | Result consumption | Once per result; `map`/`filter`/`flatMap`/`getRowsUpdated` share one consumption state. |

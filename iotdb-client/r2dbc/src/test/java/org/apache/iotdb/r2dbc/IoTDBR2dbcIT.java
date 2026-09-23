@@ -19,11 +19,15 @@
 
 package org.apache.iotdb.r2dbc;
 
+import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
+
+import io.r2dbc.spi.Batch;
 import io.r2dbc.spi.Connection;
 import io.r2dbc.spi.ConnectionFactories;
 import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryOptions;
 import io.r2dbc.spi.R2dbcException;
+import io.r2dbc.spi.R2dbcPermissionDeniedException;
 import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Row;
 import io.r2dbc.spi.Statement;
@@ -267,6 +271,116 @@ public class IoTDBR2dbcIT {
     }
   }
 
+  @Test
+  public void batchStatementsRunInOrderAndStopAtTheFirstFailure() {
+    ConnectionFactory factory = factory(IoTDBConnectionConfiguration.SqlDialect.TABLE);
+    Connection connection = Mono.from(factory.create()).block();
+    try {
+      execute(connection, "CREATE DATABASE IF NOT EXISTS " + DATABASE);
+      execute(
+          connection,
+          "CREATE TABLE IF NOT EXISTS "
+              + DATABASE
+              + ".batch_samples(device STRING TAG, v INT32 FIELD)");
+
+      // Statements without parameters run in order.
+      Batch batch =
+          connection
+              .createBatch()
+              .add("INSERT INTO " + DATABASE + ".batch_samples(time,device,v) VALUES (1,'b1',1)")
+              .add("INSERT INTO " + DATABASE + ".batch_samples(time,device,v) VALUES (2,'b1',2)");
+      assertEquals(2, Flux.from(batch.execute()).cast(Result.class).collectList().block().size());
+
+      // Parameter placeholders are rejected for batches.
+      assertThrows(
+          IoTDBR2dbcException.class,
+          () ->
+              connection
+                  .createBatch()
+                  .add("SELECT * FROM " + DATABASE + ".batch_samples WHERE v = ?"));
+
+      // The first error stops the batch; earlier statements keep their effect.
+      Batch failing =
+          connection
+              .createBatch()
+              .add("INSERT INTO " + DATABASE + ".batch_samples(time,device,v) VALUES (3,'b1',3)")
+              .add("SELECT * FROM " + DATABASE + ".does_not_exist")
+              .add("INSERT INTO " + DATABASE + ".batch_samples(time,device,v) VALUES (4,'b1',4)");
+      assertThrows(R2dbcException.class, () -> Flux.from(failing.execute()).collectList().block());
+
+      List<Row> rows =
+          query(
+              connection.createStatement(
+                  "SELECT time FROM "
+                      + DATABASE
+                      + ".batch_samples WHERE device = 'b1' ORDER BY time"));
+      assertEquals(3, rows.size());
+    } finally {
+      Mono.from(connection.close()).block();
+    }
+  }
+
+  @Test
+  public void statementTimeoutsAndClosedConnectionAreEnforced() {
+    ConnectionFactory factory = factory(IoTDBConnectionConfiguration.SqlDialect.TABLE);
+    Connection connection = Mono.from(factory.create()).block();
+    try {
+      execute(connection, "CREATE DATABASE IF NOT EXISTS " + DATABASE);
+      execute(
+          connection,
+          "CREATE TABLE IF NOT EXISTS "
+              + DATABASE
+              + ".lifecycle(device STRING TAG, v INT32 FIELD)");
+      execute(
+          connection,
+          "INSERT INTO "
+              + DATABASE
+              + ".lifecycle(time,device,v) VALUES (1,'d1',11),(2,'d1',22),(3,'d1',33)");
+
+      // fetchSize(0) means "driver default"; a negative value is rejected.
+      Statement zero = connection.createStatement("SELECT v FROM " + DATABASE + ".lifecycle");
+      assertEquals(3, query(zero.fetchSize(0)).size());
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> connection.createStatement("SELECT v").fetchSize(-1));
+
+      // Asking for update counts on a query consumes nothing but must release the cursor, so the
+      // connection stays usable.
+      List<Long> updates =
+          Flux.from(
+                  connection.createStatement("SELECT v FROM " + DATABASE + ".lifecycle").execute())
+              .flatMap(Result::getRowsUpdated)
+              .collectList()
+              .block();
+      assertTrue(updates.isEmpty());
+      assertEquals(
+          3, query(connection.createStatement("SELECT v FROM " + DATABASE + ".lifecycle")).size());
+
+      // Remote validation issues a light weight RPC.
+      assertTrue(Mono.from(connection.validate(ValidationDepth.REMOTE)).block());
+
+      Mono.from(connection.close()).block();
+      assertThrows(IllegalStateException.class, () -> connection.createStatement("SELECT 1"));
+      // Closing twice is a no-op.
+      Mono.from(connection.close()).block();
+    } finally {
+      Mono.from(connection.close()).block();
+    }
+  }
+
+  @Test
+  public void wrongCredentialsAreRejectedAsPermissionErrors() {
+    ConnectionFactory factory =
+        factory(
+            IoTDBConnectionConfiguration.SqlDialect.TABLE,
+            System.getProperty("iotdb.it.password") + "x");
+    R2dbcException error =
+        assertThrows(R2dbcException.class, () -> Mono.from(factory.create()).block());
+    assertTrue(
+        "expected a permission failure but was " + error,
+        error instanceof R2dbcPermissionDeniedException);
+  }
+
   private static List<Row> query(Statement statement) {
     return Flux.from(statement.execute())
         .flatMap(result -> result.map((row, metadata) -> row))
@@ -304,13 +418,18 @@ public class IoTDBR2dbcIT {
   }
 
   private static ConnectionFactory factory(IoTDBConnectionConfiguration.SqlDialect dialect) {
+    return factory(dialect, System.getProperty("iotdb.it.password"));
+  }
+
+  private static ConnectionFactory factory(
+      IoTDBConnectionConfiguration.SqlDialect dialect, String password) {
     ConnectionFactoryOptions options =
         ConnectionFactoryOptions.builder()
             .option(ConnectionFactoryOptions.DRIVER, "iotdb")
             .option(ConnectionFactoryOptions.HOST, System.getProperty("iotdb.it.host"))
             .option(ConnectionFactoryOptions.PORT, Integer.getInteger("iotdb.it.port", 6667))
             .option(ConnectionFactoryOptions.USER, System.getProperty("iotdb.it.user"))
-            .option(ConnectionFactoryOptions.PASSWORD, System.getProperty("iotdb.it.password"))
+            .option(ConnectionFactoryOptions.PASSWORD, password)
             .option(
                 IoTDBConnectionFactoryOptions.SQL_DIALECT,
                 dialect == IoTDBConnectionConfiguration.SqlDialect.TREE ? "tree" : "table")
