@@ -24,6 +24,9 @@ public final class R2dbcMessages {
 
   private R2dbcMessages() {}
 
+  public static final String EXCEPTION_TEMPORAL_PARAMETERS_MUST_BE_CONVERTED_WITH_THE_SESSION_PRECISION_AND_TIME_ZONE_BEFORE_BINDING_90DAA184 = "Temporal parameters must be converted with the session precision and time zone before binding";
+  public static final String EXCEPTION_LOCAL_DATE_TIME_ARG_IS_AMBIGUOUS_OR_INVALID_IN_TIME_ZONE_ARG_665B6E7F = "Local date time %s is ambiguous or invalid in time zone %s";
+
   public static final String EXCEPTION_BATCH_STATEMENTS_MUST_NOT_CONTAIN_PARAMETERS_E2027860 = "Batch statements must not contain parameters";
   public static final String EXCEPTION_BINDNULL_REQUIRES_A_NON_NULL_TYPE_CFFB310F = "bindNull requires a non-null type";
   public static final String EXCEPTION_BIND_REQUIRES_A_NON_NULL_VALUE_USE_BINDNULL_FOR_SQL_NULL_57886CDE = "bind requires a non-null value; use bindNull for SQL NULL";
@@ -72,7 +75,6 @@ public final class R2dbcMessages {
   public static final String EXCEPTION_THE_SERVER_DID_NOT_RETURN_A_SESSION_ID_F39EF954 = "The server did not return a session id";
   public static final String EXCEPTION_THE_SERVER_REPORTED_AN_UNSUPPORTED_TIMESTAMP_PRECISION_ARG_478A6D95 = "The server reported an unsupported timestamp precision: %s";
   public static final String EXCEPTION_THE_STATEMENT_HAS_ARG_PLACEHOLDERS_BUT_ARG_PARAMETERS_WERE_SUPPLIED_1295275A = "The statement has %d placeholders but %d parameters were supplied";
-  public static final String EXCEPTION_THE_STATEMENT_HAS_NO_QUERY_RESULT_8EF4AD15 = "The statement has no query result";
   public static final String EXCEPTION_THE_STATEMENT_TIMED_OUT_AFTER_ARG_37D4D030 = "The statement timed out after %s";
   public static final String EXCEPTION_THE_STATEMENT_TIMEOUT_MUST_NOT_BE_NEGATIVE_BUT_WAS_ARG_74BD2508 = "The statement timeout must not be negative, but was %s";
   public static final String EXCEPTION_TLS_IS_NOT_SUPPORTED_BY_THIS_DRIVER_VERSION_79D86451 = "TLS is not supported by this driver version";

@@ -254,8 +254,10 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
             response -> {
               synchronized (this) {
                 fetching = false;
-                moreData = response.isMoreData();
-                if (response.getQueryResult() != null) {
+                // A page without a result set ends the query, even when the server still reports
+                // moreData; this mirrors the reference session client.
+                moreData = response.isHasResultSet() && response.isMoreData();
+                if (response.isHasResultSet() && response.getQueryResult() != null) {
                   pages.addAll(response.getQueryResult());
                 }
               }

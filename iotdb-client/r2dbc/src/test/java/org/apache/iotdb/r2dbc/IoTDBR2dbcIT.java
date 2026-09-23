@@ -36,6 +36,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -194,6 +196,82 @@ public class IoTDBR2dbcIT {
     } finally {
       Mono.from(connection.close()).block();
     }
+  }
+
+  @Test
+  public void timestampParametersUseEpochTicksAndFailedPreparesAreReleased() {
+    ConnectionFactory factory = factory(IoTDBConnectionConfiguration.SqlDialect.TABLE);
+    Connection connection = Mono.from(factory.create()).block();
+    // Unique timestamps keep repeated runs of this test independent, because the table keeps the
+    // rows written by earlier runs.
+    long base = System.currentTimeMillis();
+    try {
+      execute(connection, "CREATE DATABASE IF NOT EXISTS " + DATABASE);
+      execute(
+          connection,
+          "CREATE TABLE IF NOT EXISTS " + DATABASE + ".times(device STRING TAG, v INT32 FIELD)");
+      execute(
+          connection,
+          "INSERT INTO "
+              + DATABASE
+              + ".times(time,device,v) VALUES ("
+              + (base + 1000)
+              + ",'d1',1),("
+              + (base + 2000)
+              + ",'d1',2),("
+              + (base + 3000)
+              + ",'d1',3)");
+
+      // A LocalDateTime parameter is converted with the connection zone; the default is UTC.
+      List<Row> afterOne =
+          query(
+              connection
+                  .createStatement(
+                      "SELECT v FROM " + DATABASE + ".times WHERE time > ? ORDER BY time")
+                  .bind(
+                      1,
+                      LocalDateTime.ofInstant(Instant.ofEpochMilli(base + 1000), ZoneOffset.UTC)));
+      assertEquals(2, afterOne.size());
+      assertEquals(Integer.valueOf(2), afterOne.get(0).get("v", Integer.class));
+
+      // Instant parameters use the same epoch tick encoding.
+      List<Row> afterTwo =
+          query(
+              connection
+                  .createStatement(
+                      "SELECT v FROM " + DATABASE + ".times WHERE time > ? ORDER BY time")
+                  .bind(1, Instant.ofEpochMilli(base + 2000)));
+      assertEquals(1, afterTwo.size());
+      assertEquals(Integer.valueOf(3), afterTwo.get(0).get("v", Integer.class));
+
+      // A statement that fails after prepare must release its server side handle, otherwise the
+      // next execution would be rejected with "Prepared statement ... already exists".
+      assertThrows(
+          R2dbcException.class,
+          () ->
+              Mono.from(
+                      connection
+                          .createStatement("SELECT v FROM " + DATABASE + ".times WHERE v > ?")
+                          .bind(1, "not-a-number")
+                          .execute())
+                  .block());
+
+      List<Row> recovered =
+          query(
+              connection
+                  .createStatement("SELECT v FROM " + DATABASE + ".times WHERE time > ?")
+                  .bind(1, base));
+      assertEquals(3, recovered.size());
+    } finally {
+      Mono.from(connection.close()).block();
+    }
+  }
+
+  private static List<Row> query(Statement statement) {
+    return Flux.from(statement.execute())
+        .flatMap(result -> result.map((row, metadata) -> row))
+        .collectList()
+        .block();
   }
 
   private static void insertSampleRows(Connection connection, int count) {

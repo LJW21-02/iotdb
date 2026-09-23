@@ -24,14 +24,17 @@ import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
 
 import java.math.BigDecimal;
 import java.sql.Types;
+import java.time.Instant;
+import java.time.LocalDateTime;
 
 /**
  * One validated statement parameter.
  *
  * <p>Only types whose encoding is defined for this driver are accepted: strings, booleans, the
- * integral types, floating point numbers and {@link BigDecimal}. Time values, binary values and
- * anything else are rejected before a request is sent, because neither the typed nor the literal
- * encoding has been verified for them.
+ * integral types, floating point numbers, {@link BigDecimal} and the temporal types {@link Instant}
+ * and {@link LocalDateTime}. Temporal values are converted to epoch ticks by {@link
+ * TimeValueConverter} before execution. Binary values, dates and anything else are rejected before
+ * a request is sent, because no encoding has been verified for them.
  */
 public final class ParameterBinding {
 
@@ -89,7 +92,22 @@ public final class ParameterBinding {
     if (CharSequence.class.isAssignableFrom(type)) {
       return Types.VARCHAR;
     }
+    if (Instant.class.equals(type) || LocalDateTime.class.equals(type)) {
+      return Types.BIGINT;
+    }
     throw unsupported(type);
+  }
+
+  /** Whether the value must be converted with the session precision and time zone first. */
+  public boolean isTemporal() {
+    if (nullValue) {
+      return false;
+    }
+    return value instanceof Instant || value instanceof LocalDateTime;
+  }
+
+  Object rawValue() {
+    return value;
   }
 
   /** Value handed to the server side parameter codec; {@code null} for SQL NULL. */
@@ -139,6 +157,11 @@ public final class ParameterBinding {
       sql.append(((BigDecimal) value).toPlainString());
       return;
     }
+    if (isTemporal()) {
+      throw new IoTDBR2dbcException(
+          R2dbcMessages
+              .EXCEPTION_TEMPORAL_PARAMETERS_MUST_BE_CONVERTED_WITH_THE_SESSION_PRECISION_AND_TIME_ZONE_BEFORE_BINDING_90DAA184);
+    }
     sql.append(value);
   }
 
@@ -160,6 +183,8 @@ public final class ParameterBinding {
         || Float.class.equals(type)
         || Double.class.equals(type)
         || BigDecimal.class.equals(type)
+        || Instant.class.equals(type)
+        || LocalDateTime.class.equals(type)
         || CharSequence.class.isAssignableFrom(type)) {
       return;
     }

@@ -23,6 +23,7 @@ import org.apache.iotdb.r2dbc.IoTDBConnectionConfiguration;
 import org.apache.iotdb.r2dbc.R2dbcMessages;
 import org.apache.iotdb.r2dbc.codec.LiteralBinder;
 import org.apache.iotdb.r2dbc.codec.ParameterBinding;
+import org.apache.iotdb.r2dbc.codec.TimeValueConverter;
 import org.apache.iotdb.r2dbc.exception.ExceptionMapper;
 import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
 import org.apache.iotdb.r2dbc.transport.IoTDBAsyncClient;
@@ -59,6 +60,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -66,6 +68,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
 /**
@@ -95,6 +98,7 @@ public final class IoTDBConnection implements Connection, Lifecycle {
   private final String serverVersion;
   private final AtomicBoolean open = new AtomicBoolean(true);
   private final AtomicBoolean statementActive = new AtomicBoolean();
+  private final AtomicLong preparedStatementCounter = new AtomicLong();
   private final Object rpcLock = new Object();
 
   private CompletableFuture<Void> rpcTail = CompletableFuture.completedFuture(null);
@@ -246,18 +250,20 @@ public final class IoTDBConnection implements Connection, Lifecycle {
     return Mono.defer(
         () -> {
           int effectiveFetchSize = effectiveFetchSize(fetchSize);
+          List<ParameterBinding> wireParameters = toWireParameters(parameters);
           Mono<TSExecuteStatementResp> execution;
           String preparedStatementName = null;
-          if (parameters.isEmpty()) {
+          if (wireParameters.isEmpty()) {
             execution = executeStatement(sql, effectiveFetchSize);
-          } else if (canUsePreparedStatement(sql, parameters)) {
+          } else if (canUsePreparedStatement(sql, wireParameters)) {
             preparedStatementName = preparedName();
             execution =
                 executePreparedStatement(
-                    sql, parameters, effectiveFetchSize, preparedStatementName);
+                    sql, wireParameters, effectiveFetchSize, preparedStatementName);
           } else {
             // The tree dialect has no server side prepare; literals are the only verified path.
-            execution = executeStatement(LiteralBinder.bind(sql, parameters), effectiveFetchSize);
+            execution =
+                executeStatement(LiteralBinder.bind(sql, wireParameters), effectiveFetchSize);
           }
           String preparedName = preparedStatementName;
           Duration timeout = statementTimeout;
@@ -310,15 +316,10 @@ public final class IoTDBConnection implements Connection, Lifecycle {
           if (serverTimeout > 0) {
             request.setTimeout(serverTimeout);
           }
+          // An empty page (hasResultSet=false) is the end-of-results signal used by the
+          // reference client; the cursor stops paging on it.
           return call(client -> client.fetchResults(request))
-              .doOnNext(
-                  response -> {
-                    ExceptionMapper.verifySuccess(response.getStatus(), sql);
-                    if (!response.isHasResultSet()) {
-                      throw new IoTDBR2dbcException(
-                          R2dbcMessages.EXCEPTION_THE_STATEMENT_HAS_NO_QUERY_RESULT_8EF4AD15);
-                    }
-                  });
+              .doOnNext(response -> ExceptionMapper.verifySuccess(response.getStatus(), sql));
         });
   }
 
@@ -369,7 +370,19 @@ public final class IoTDBConnection implements Connection, Lifecycle {
               }
               return call(client -> client.executePreparedStatement(request));
             })
-        .doOnNext(response -> ExceptionMapper.verifySuccess(response.getStatus(), sql));
+        .doOnNext(response -> ExceptionMapper.verifySuccess(response.getStatus(), sql))
+        .onErrorResume(
+            error ->
+                releasePreparedStatement(statementName)
+                    .onErrorResume(ignored -> Mono.empty())
+                    .then(Mono.error(error)));
+  }
+
+  private Mono<Void> releasePreparedStatement(String statementName) {
+    TSDeallocatePreparedReq request = new TSDeallocatePreparedReq(sessionId, statementName);
+    return call(client -> client.deallocatePreparedStatement(request))
+        .doOnNext(status -> ExceptionMapper.verifySuccess(status, null))
+        .then();
   }
 
   private IoTDBResult buildResult(
@@ -418,13 +431,7 @@ public final class IoTDBConnection implements Connection, Lifecycle {
                           .then());
             }
             if (preparedStatementName != null) {
-              TSDeallocatePreparedReq request =
-                  new TSDeallocatePreparedReq(sessionId, preparedStatementName);
-              cleanup =
-                  cleanup.then(
-                      call(client -> client.deallocatePreparedStatement(request))
-                          .doOnNext(status -> ExceptionMapper.verifySuccess(status, null))
-                          .then());
+              cleanup = cleanup.then(releasePreparedStatement(preparedStatementName));
             }
           }
           return cleanup
@@ -491,7 +498,22 @@ public final class IoTDBConnection implements Connection, Lifecycle {
   }
 
   private String preparedName() {
-    return "r2dbc_" + statementId;
+    // Every execution gets its own name so a statement that failed after prepare cannot collide
+    // with the next one.
+    return "r2dbc_" + statementId + "_" + preparedStatementCounter.incrementAndGet();
+  }
+
+  /** Converts temporal parameters into the epoch ticks verified for the session precision. */
+  private List<ParameterBinding> toWireParameters(List<ParameterBinding> parameters) {
+    if (parameters.isEmpty()) {
+      return parameters;
+    }
+    List<ParameterBinding> wireParameters = new ArrayList<>(parameters.size());
+    for (ParameterBinding parameter : parameters) {
+      wireParameters.add(
+          TimeValueConverter.toWireParameter(parameter, timeFactor, configuration.zoneId()));
+    }
+    return wireParameters;
   }
 
   private int effectiveFetchSize(int requested) {
@@ -705,18 +727,21 @@ public final class IoTDBConnection implements Connection, Lifecycle {
     if (cursor != null) {
       cursor.close();
     }
-    CompletableFuture<Void> tail;
+    // Wait for both the queued requests and the cleanup bookkeeping: the cleanup flag is cleared
+    // after the close requests completed, so a connection is only reusable once this settles.
+    CompletableFuture<Void> requests;
+    CompletableFuture<Void> cleanup;
     synchronized (rpcLock) {
-      tail = rpcTail;
+      requests = rpcTail;
+      cleanup = cleanupTail;
     }
-    return Mono.fromCompletionStage(tail)
+    return Mono.fromCompletionStage(requests)
+        .then(Mono.fromCompletionStage(cleanup))
         .then(
             Mono.fromRunnable(
                 () -> {
                   if (statementActive.get()) {
-                    throw new IoTDBR2dbcException(
-                        R2dbcMessages
-                            .EXCEPTION_THE_CONNECTION_STILL_HAS_AN_ACTIVE_RESULT_CLOSE_IT_BEFORE_STARTING_ANOTHER_OPERATION_4D9EA1CA);
+                    throw stillHasActiveResult();
                   }
                 }));
   }

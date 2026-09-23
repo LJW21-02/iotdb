@@ -87,8 +87,12 @@ connection is opened.
 |-|-|
 | Table model, `SELECT` / `INSERT` / DDL | Supported, verified end to end. |
 | Tree model queries and writes | Supported; the time column is exposed as `Time` (`TIMESTAMP`), the default `LocalDateTime`, with `get(..., Long.class)`/`get(..., Instant.class)` for raw ticks and instants. |
-| Typed parameters | Table model queries with `String`, `Boolean`, `Byte`/`Short`/`Integer`, `Long`, `Float`, `Double`, using the server side prepare RPC. |
+| Typed parameters | Table model queries with `String`, `Boolean`, `Byte`/`Short`/`Integer`, `Long`, `Float`, `Double` and `Instant`/`LocalDateTime`, using the server side prepare RPC. |
+| Time parameters | `Instant` and `LocalDateTime` are converted to epoch ticks in the session precision (`iotdb.timeZone` resolves `LocalDateTime`); ambiguous DST times and precision loss are rejected. An ISO-8601 string is *not* accepted by the server for a `TIMESTAMP` comparison (`Cannot apply operator: TIMESTAMP < STRING`), so ticks are the only verified form. |
 | Literal parameters | All statements and dialects for the types above; placeholders inside strings, identifiers and comments are never rewritten. |
+| `DATE` parameters | Not supported: this server version rejects both `DATE < STRING` and `DATE < INT32` comparisons, so binding a `LocalDate` fails at bind time instead of being sent. Rows of a `DATE` column are decoded with the TsFile date encoding. |
+| Connection pool | Verified with `r2dbc-pool` 1.0.2: borrow, `LOCAL` validation, release, lifecycle reset and reuse of the same connection. |
+| Prepared statements | One server side handle per execution; a statement that fails after prepare is deallocated, so the next execution cannot collide with a leaked handle. |
 | Backpressure | Pages are fetched only when the current page is exhausted and more rows are demanded. |
 | Single result per connection | One active result; a second statement fails or waits for cleanup, never interleaves. |
 | Result consumption | Once per result; `map`/`filter`/`flatMap`/`getRowsUpdated` share one consumption state. |
@@ -112,8 +116,17 @@ mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcIT -DfailIfNoTests=false \
 mvn spotless:apply -pl iotdb-client/r2dbc
 ```
 
+## Spring `DatabaseClient`
+
+Spring's `DatabaseClient` cannot derive bind markers from a driver that does not publish Spring
+types, so build it with named parameters disabled (or an explicit `BindMarkersFactory`):
+
+```java
+DatabaseClient client =
+    DatabaseClient.builder().connectionFactory(factory).namedParameters(false).build();
+```
+
 ## Follow-up work
 
-TLS, Snappy, multi-node redirection, time typed parameters, the R2DBC TCK profile, connection pool
-reset semantics and the Spring `DatabaseClient` sample are tracked by the milestones of the design
-document above.
+TLS, Snappy, multi-node redirection, `DATE` parameter semantics, the R2DBC TCK profile and long
+running stability tests are tracked by the milestones of the design document above.
