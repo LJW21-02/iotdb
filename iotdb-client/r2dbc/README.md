@@ -118,13 +118,26 @@ mvn spotless:apply -pl iotdb-client/r2dbc
 
 ## Spring `DatabaseClient`
 
-Spring's `DatabaseClient` cannot derive bind markers from a driver that does not publish Spring
-types, so build it with named parameters disabled (or an explicit `BindMarkersFactory`):
+Spring cannot derive bind markers from a driver that publishes no Spring types, so the default
+builder fails with `NoBindMarkersFactoryException`. Build the client with named parameters disabled
+(or with an explicit `BindMarkersFactory`):
 
 ```java
 DatabaseClient client =
     DatabaseClient.builder().connectionFactory(factory).namedParameters(false).build();
+
+Flux<Integer> values =
+    client
+        .sql("SELECT v FROM demo.samples WHERE v > ? ORDER BY time")
+        .bind(0, 100) // DatabaseClient with anonymous markers is zero based
+        .map((row, metadata) -> row.get("v", Integer.class))
+        .all();
 ```
+
+Verified with `spring-r2dbc` 6.1.13 against a live instance: the default builder fails exactly as
+documented, while the explicit client executes a parameterised query and returns the expected rows.
+Values bound by frameworks arrive as `io.r2dbc.spi.Parameter`; the driver unwraps them, and a typed
+null becomes a `bindNull` for the declared type.
 
 ## Follow-up work
 

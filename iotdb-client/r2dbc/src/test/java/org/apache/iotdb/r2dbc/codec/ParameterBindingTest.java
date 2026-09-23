@@ -21,10 +21,12 @@ package org.apache.iotdb.r2dbc.codec;
 
 import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
 
+import io.r2dbc.spi.Parameters;
 import org.junit.Test;
 
 import java.math.BigDecimal;
 import java.sql.Types;
+import java.time.Instant;
 import java.time.LocalDate;
 
 import static org.junit.Assert.assertEquals;
@@ -70,6 +72,25 @@ public class ParameterBindingTest {
     assertTrue(binding.isNull());
     assertNull(binding.encodedValue());
     assertEquals(Types.INTEGER, binding.jdbcType());
+  }
+
+  @Test
+  public void unwrapsSpiParameterWrappersUsedByFrameworks() {
+    // Spring's DatabaseClient binds values wrapped in io.r2dbc.spi.Parameter.
+    ParameterBinding wrapped = ParameterBinding.of(Parameters.in(7));
+    assertEquals(Types.INTEGER, wrapped.jdbcType());
+    assertEquals(7, wrapped.encodedValue());
+
+    ParameterBinding typedNull = ParameterBinding.of(Parameters.in(String.class));
+    assertTrue(typedNull.isNull());
+    assertEquals(Types.VARCHAR, typedNull.jdbcType());
+
+    ParameterBinding wrappedTemporal = ParameterBinding.of(Parameters.in(Instant.ofEpochMilli(1L)));
+    assertTrue(wrappedTemporal.isTemporal());
+    assertEquals(Types.BIGINT, wrappedTemporal.jdbcType());
+
+    assertThrows(
+        IoTDBR2dbcException.class, () -> ParameterBinding.of(Parameters.out(Integer.class)));
   }
 
   @Test

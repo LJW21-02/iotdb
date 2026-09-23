@@ -22,6 +22,9 @@ package org.apache.iotdb.r2dbc.codec;
 import org.apache.iotdb.r2dbc.R2dbcMessages;
 import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
 
+import io.r2dbc.spi.Parameter;
+import io.r2dbc.spi.Type;
+
 import java.math.BigDecimal;
 import java.sql.Types;
 import java.time.Instant;
@@ -53,6 +56,22 @@ public final class ParameterBinding {
       throw new IllegalArgumentException(
           R2dbcMessages
               .EXCEPTION_BIND_REQUIRES_A_NON_NULL_VALUE_USE_BINDNULL_FOR_SQL_NULL_57886CDE);
+    }
+    if (value instanceof Parameter) {
+      Parameter parameter = (Parameter) value;
+      if (!(parameter instanceof Parameter.In)) {
+        throw unsupported(parameter.getClass());
+      }
+      Object parameterValue = parameter.getValue();
+      if (parameterValue == null) {
+        // A typed null carries the type only; bindNull validates it like an explicit null.
+        Type type = parameter.getType();
+        if (type == null || type.getJavaType() == null) {
+          throw unsupported(parameter.getClass());
+        }
+        return nullOf(type.getJavaType());
+      }
+      value = parameterValue;
     }
     requireSupported(value);
     return new ParameterBinding(value, value.getClass(), false);

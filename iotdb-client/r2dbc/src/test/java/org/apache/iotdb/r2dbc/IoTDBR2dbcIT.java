@@ -93,12 +93,12 @@ public class IoTDBR2dbcIT {
           insert.add();
         }
         insert
-            .bind(1, 1_700_000_000_000L + offset)
-            .bind(2, "d" + offset)
-            .bind(3, offset)
-            .bind(4, offset + 0.5D)
-            .bind(5, "text-" + offset)
-            .bind(6, offset % 2 == 0);
+            .bind(0, 1_700_000_000_000L + offset)
+            .bind(1, "d" + offset)
+            .bind(2, offset)
+            .bind(3, offset + 0.5D)
+            .bind(4, "text-" + offset)
+            .bind(5, offset % 2 == 0);
       }
       List<Result> insertResults =
           Flux.from(insert.execute()).cast(Result.class).collectList().block();
@@ -116,7 +116,7 @@ public class IoTDBR2dbcIT {
                           "SELECT time, device, v, d, s, b FROM "
                               + DATABASE
                               + ".samples WHERE v >= ? ORDER BY time")
-                      .bind(1, 100)
+                      .bind(0, 100)
                       .execute())
               .flatMap(result -> result.map((row, metadata) -> row))
               .collectList()
@@ -134,7 +134,7 @@ public class IoTDBR2dbcIT {
       Statement select =
           connection
               .createStatement("SELECT v FROM " + DATABASE + ".samples WHERE v < ? ORDER BY time")
-              .bind(1, 100)
+              .bind(0, 100)
               .fetchSize(2);
       List<Integer> values =
           Flux.from(select.execute())
@@ -229,7 +229,7 @@ public class IoTDBR2dbcIT {
                   .createStatement(
                       "SELECT v FROM " + DATABASE + ".times WHERE time > ? ORDER BY time")
                   .bind(
-                      1,
+                      0,
                       LocalDateTime.ofInstant(Instant.ofEpochMilli(base + 1000), ZoneOffset.UTC)));
       assertEquals(2, afterOne.size());
       assertEquals(Integer.valueOf(2), afterOne.get(0).get("v", Integer.class));
@@ -240,7 +240,7 @@ public class IoTDBR2dbcIT {
               connection
                   .createStatement(
                       "SELECT v FROM " + DATABASE + ".times WHERE time > ? ORDER BY time")
-                  .bind(1, Instant.ofEpochMilli(base + 2000)));
+                  .bind(0, Instant.ofEpochMilli(base + 2000)));
       assertEquals(1, afterTwo.size());
       assertEquals(Integer.valueOf(3), afterTwo.get(0).get("v", Integer.class));
 
@@ -252,7 +252,7 @@ public class IoTDBR2dbcIT {
               Mono.from(
                       connection
                           .createStatement("SELECT v FROM " + DATABASE + ".times WHERE v > ?")
-                          .bind(1, "not-a-number")
+                          .bind(0, "not-a-number")
                           .execute())
                   .block());
 
@@ -260,7 +260,7 @@ public class IoTDBR2dbcIT {
           query(
               connection
                   .createStatement("SELECT v FROM " + DATABASE + ".times WHERE time > ?")
-                  .bind(1, base));
+                  .bind(0, base));
       assertEquals(3, recovered.size());
     } finally {
       Mono.from(connection.close()).block();

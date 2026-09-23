@@ -37,8 +37,8 @@ import java.util.Map;
 /**
  * A statement executed by one connection.
  *
- * <p>Parameters are bound by position only; every {@code add()} starts a new binding set and {@code
- * execute()} produces one result per set, in order.
+ * <p>Parameters are bound by zero-based position, as required by the SPI; every {@code add()}
+ * starts a new binding set and {@code execute()} produces one result per set, in order.
  */
 public final class IoTDBStatement implements Statement {
 
@@ -123,7 +123,7 @@ public final class IoTDBStatement implements Statement {
     List<List<ParameterBinding>> snapshot = new ArrayList<>(bindingSets.size());
     for (Map<Integer, ParameterBinding> bindings : bindingSets) {
       List<ParameterBinding> ordered = new ArrayList<>(placeholders);
-      for (int index = 1; index <= placeholders; index++) {
+      for (int index = 0; index < placeholders; index++) {
         ParameterBinding binding = bindings.get(index);
         if (binding == null) {
           throw new IoTDBR2dbcException(
@@ -137,15 +137,14 @@ public final class IoTDBStatement implements Statement {
   }
 
   private void requireValidIndex(int index) {
-    if (index < 1) {
-      throw new IllegalArgumentException(
+    if (index < 0) {
+      throw new IndexOutOfBoundsException(
           String.format(
-              R2dbcMessages
-                  .EXCEPTION_PARAMETER_INDEX_MUST_BE_GREATER_THAN_ZERO_BUT_WAS_ARG_735D56C0,
+              R2dbcMessages.EXCEPTION_PARAMETER_INDEX_MUST_NOT_BE_NEGATIVE_BUT_WAS_ARG_59A7879B,
               index));
     }
-    if (index > placeholders) {
-      throw new IllegalArgumentException(
+    if (index >= placeholders) {
+      throw new IndexOutOfBoundsException(
           String.format(
               R2dbcMessages
                   .EXCEPTION_PARAMETER_INDEX_ARG_EXCEEDS_THE_ARG_PLACEHOLDERS_OF_THE_STATEMENT_F5525F22,
