@@ -54,5 +54,19 @@ public final class IoTDBConnectionFactoryOptions {
   /** Budget for closing a query handle, defaults to 10 seconds. */
   public static final Option<Duration> CLEANUP_TIMEOUT = Option.valueOf("iotdb.cleanupTimeout");
 
+  /** PKCS#12/JKS trust store used to verify the server certificate; defaults to the JVM store. */
+  public static final Option<String> TRUST_STORE = Option.valueOf("iotdb.trustStore");
+
+  /** Password of {@link #TRUST_STORE}. */
+  public static final Option<String> TRUST_STORE_PASSWORD =
+      Option.sensitiveValueOf("iotdb.trustStorePassword");
+
+  /** Key store with the client certificate for mutual TLS. */
+  public static final Option<String> KEY_STORE = Option.valueOf("iotdb.keyStore");
+
+  /** Password of {@link #KEY_STORE}. */
+  public static final Option<String> KEY_STORE_PASSWORD =
+      Option.sensitiveValueOf("iotdb.keyStorePassword");
+
   private IoTDBConnectionFactoryOptions() {}
 }

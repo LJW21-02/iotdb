@@ -42,6 +42,7 @@ public record IoTDBConnectionConfiguration(
     String database,
     String user,
     String password,
+    TlsConfiguration tls,
     SqlDialect sqlDialect,
     ZoneId zoneId,
     Protocol protocol,
@@ -74,10 +75,26 @@ public record IoTDBConnectionConfiguration(
     COMPACT
   }
 
+  /**
+   * TLS settings: whether TLS is enabled and, optionally, the trust store that verifies the server
+   * certificate plus a key store for mutual TLS. Without an explicit trust store the JVM default
+   * one is used.
+   */
+  public record TlsConfiguration(
+      boolean enabled,
+      String trustStore,
+      String trustStorePassword,
+      String keyStore,
+      String keyStorePassword) {
+
+    public static TlsConfiguration disabled() {
+      return new TlsConfiguration(false, null, null, null, null);
+    }
+  }
+
   public static IoTDBConnectionConfiguration from(ConnectionFactoryOptions options) {
     String user = stringValue(options, ConnectionFactoryOptions.USER, null);
     String password = stringValue(options, ConnectionFactoryOptions.PASSWORD, user);
-    requireTlsDisabled(options);
     requireFrameCompressionSupported(options);
     return new IoTDBConnectionConfiguration(
         stringValue(options, ConnectionFactoryOptions.HOST, DEFAULT_HOST),
@@ -85,6 +102,7 @@ public record IoTDBConnectionConfiguration(
         stringValue(options, ConnectionFactoryOptions.DATABASE, null),
         user,
         password,
+        tlsConfiguration(options),
         sqlDialect(options),
         zoneId(options),
         protocol(options),
@@ -99,25 +117,44 @@ public record IoTDBConnectionConfiguration(
   }
 
   /**
-   * Validates the raw SSL value and rejects TLS, which is not verified for this driver version.
+   * Reads the raw SSL value and the TLS material.
    *
    * <p>The R2DBC SPI turns {@code r2dbcs:} into {@code Boolean.TRUE} but turns an explicit {@code
    * ssl=false} query parameter into the string {@code "false"}; the provider cannot tell them apart
-   * afterwards, so the raw value is checked here.
+   * afterwards, so the raw value is checked here instead of being coerced to a boolean.
    */
-  private static void requireTlsDisabled(ConnectionFactoryOptions options) {
+  private static TlsConfiguration tlsConfiguration(ConnectionFactoryOptions options) {
     Object value = options.getValue(ConnectionFactoryOptions.SSL);
     if (value == null || Boolean.FALSE.equals(value)) {
-      return;
+      return TlsConfiguration.disabled();
     }
-    if (Boolean.TRUE.equals(value)
-        || (value instanceof String && "true".equalsIgnoreCase(((String) value).trim()))) {
+    if (!Boolean.TRUE.equals(value)
+        && !(value instanceof String && "true".equalsIgnoreCase(((String) value).trim()))) {
       throw new IoTDBR2dbcException(
-          R2dbcMessages.EXCEPTION_TLS_IS_NOT_SUPPORTED_BY_THIS_DRIVER_VERSION_79D86451);
+          R2dbcMessages
+              .EXCEPTION_SSL_MUST_BE_ENABLED_WITH_BOOLEAN_TRUE_THE_STRING_TRUE_CASE_INSENSITIVE_TRIMMED_OR_THE_R2DBCS_SCHEME_THE_STRING_FALSE_AND_ALL_OTHER_VALUES_ARE_REJECTED_3BD83E9E);
     }
-    throw new IoTDBR2dbcException(
-        R2dbcMessages
-            .EXCEPTION_SSL_MUST_BE_ENABLED_WITH_BOOLEAN_TRUE_THE_STRING_TRUE_CASE_INSENSITIVE_TRIMMED_OR_THE_R2DBCS_SCHEME_THE_STRING_FALSE_AND_ALL_OTHER_VALUES_ARE_REJECTED_3BD83E9E);
+    return new TlsConfiguration(
+        true,
+        optionalStringValue(options, IoTDBConnectionFactoryOptions.TRUST_STORE),
+        optionalStringValue(options, IoTDBConnectionFactoryOptions.TRUST_STORE_PASSWORD),
+        optionalStringValue(options, IoTDBConnectionFactoryOptions.KEY_STORE),
+        optionalStringValue(options, IoTDBConnectionFactoryOptions.KEY_STORE_PASSWORD));
+  }
+
+  private static String optionalStringValue(ConnectionFactoryOptions options, Option<?> option) {
+    Object value = options.getValue(option);
+    if (value == null) {
+      return null;
+    }
+    if (!(value instanceof String)) {
+      throw new IoTDBR2dbcException(
+          String.format(
+              R2dbcMessages.EXCEPTION_OPTION_ARG_MUST_BE_A_STRING_BUT_WAS_ARG_817A77EE,
+              option.name(),
+              value));
+    }
+    return (String) value;
   }
 
   /** Only uncompressed frames are verified; Snappy must not be silently downgraded or accepted. */
@@ -307,6 +344,8 @@ public record IoTDBConnectionConfiguration(
         + user
         + '\''
         + ", password=REDACTED"
+        + ", tls="
+        + (tls.enabled() ? "enabled" : "disabled")
         + ", sqlDialect="
         + sqlDialect
         + ", zoneId="

@@ -75,8 +75,9 @@ Raw rounds:
 - This is an **ecosystem comparison**, not a pure transport comparison: each arm uses its own client
   stack (the driver decodes per row and dispatches callbacks on a bounded scheduler, the session
   client is a blocking RPC client). The design document requires a shared codec and a synchronous
-  baseline before attributing a difference to the transport, and the TLS and RTT arms are not
-  implemented yet.
+  baseline before attributing a difference to the transport.
+- The **TLS arm and the RTT arms are not measured yet**. TLS correctness is verified (see
+  `IoTDBR2dbcTlsIT`), but its throughput cost has not been compared under this method.
 - A single machine, a single instance and one workload shape (small row batch, no slow consumer, no
   overload) are not enough to state a general throughput or tail latency claim. The absolute values
   are also machine specific.

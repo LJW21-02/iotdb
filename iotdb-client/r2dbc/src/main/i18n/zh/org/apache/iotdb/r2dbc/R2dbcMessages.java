@@ -24,6 +24,8 @@ public final class R2dbcMessages {
 
   private R2dbcMessages() {}
 
+  public static final String EXCEPTION_FAILED_TO_INITIALIZE_TLS_ARG_770BBC57 = "初始化 TLS 失败：%s";
+
   public static final String EXCEPTION_PARAMETERS_CANNOT_BE_BOUND_TO_A_STATEMENT_THAT_CONTAINS_SEVERAL_SQL_STATEMENTS_89D234C0 = "包含多条 SQL 语句的 Statement 不能绑定参数";
 
   public static final String EXCEPTION_TEMPORAL_PARAMETERS_MUST_BE_CONVERTED_WITH_THE_SESSION_PRECISION_AND_TIME_ZONE_BEFORE_BINDING_90DAA184 = "时间类型参数必须先按会话精度和时区转换后再绑定";
@@ -79,7 +81,6 @@ public final class R2dbcMessages {
   public static final String EXCEPTION_THE_STATEMENT_HAS_ARG_PLACEHOLDERS_BUT_ARG_PARAMETERS_WERE_SUPPLIED_1295275A = "语句有 %d 个占位符，但提供了 %d 个参数";
   public static final String EXCEPTION_THE_STATEMENT_TIMED_OUT_AFTER_ARG_37D4D030 = "语句在 %s 后超时";
   public static final String EXCEPTION_THE_STATEMENT_TIMEOUT_MUST_NOT_BE_NEGATIVE_BUT_WAS_ARG_74BD2508 = "语句超时不能为负数，实际为 %s";
-  public static final String EXCEPTION_TLS_IS_NOT_SUPPORTED_BY_THIS_DRIVER_VERSION_79D86451 = "当前驱动版本不支持 TLS";
   public static final String EXCEPTION_TRANSACTIONS_ARE_NOT_SUPPORTED_BY_IOTDB_C248F946 = "IoTDB 不支持事务";
   public static final String EXCEPTION_TRANSACTION_ISOLATION_LEVELS_CANNOT_BE_CHANGED_BECAUSE_IOTDB_HAS_NO_CROSS_STATEMENT_TRANSACTIONS_54D87733 = "IoTDB 没有跨语句事务，无法修改事务隔离级别";
   public static final String EXCEPTION_TYPE_MUST_NOT_BE_NULL_3C9753B3 = "type 不能为空";

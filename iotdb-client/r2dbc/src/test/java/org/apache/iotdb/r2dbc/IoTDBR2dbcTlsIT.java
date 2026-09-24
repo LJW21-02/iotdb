@@ -19,13 +19,18 @@
 
 package org.apache.iotdb.r2dbc;
 
+import io.r2dbc.spi.Connection;
 import io.r2dbc.spi.ConnectionFactories;
 import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryOptions;
+import io.r2dbc.spi.Result;
+import io.r2dbc.spi.Row;
+import io.r2dbc.spi.ValidationDepth;
 import org.apache.thrift.transport.TTransportException;
 import org.junit.Assume;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import javax.net.ssl.SSLContext;
@@ -37,7 +42,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -61,6 +69,123 @@ public class IoTDBR2dbcTlsIT {
   public static void requireTlsServer() {
     Assume.assumeTrue(System.getProperty("iotdb.it.tls.port") != null);
     Assume.assumeTrue(System.getProperty("iotdb.it.tls.trustStore") != null);
+  }
+
+  @Test
+  public void driverConnectsOverTlsAndPagesResults() {
+    ConnectionFactory factory = tlsFactory(System.getProperty("iotdb.it.tls.trustStore"));
+    Connection connection = Mono.from(factory.create()).block();
+    try {
+      execute(connection, "CREATE DATABASE IF NOT EXISTS r2dbc_tls");
+      execute(
+          connection,
+          "CREATE TABLE IF NOT EXISTS r2dbc_tls.samples(device STRING TAG, v INT32 FIELD)");
+      execute(connection, "DELETE FROM r2dbc_tls.samples");
+      long base = System.currentTimeMillis();
+      for (int start = 1; start <= 120; start += 40) {
+        StringBuilder insert =
+            new StringBuilder("INSERT INTO r2dbc_tls.samples(time,device,v) VALUES ");
+        for (int row = start; row < start + 40 && row <= 120; row++) {
+          if (row > start) {
+            insert.append(',');
+          }
+          insert.append('(').append(base + row).append(",'d1',").append(row).append(')');
+        }
+        execute(connection, insert.toString());
+      }
+      List<Row> rows =
+          Flux.from(
+                  connection
+                      .createStatement("SELECT time, v FROM r2dbc_tls.samples ORDER BY time")
+                      .fetchSize(7)
+                      .execute())
+              .flatMap(result -> result.map((row, metadata) -> row))
+              .collectList()
+              .block();
+      assertEquals(120, rows.size());
+      long sum = 0;
+      for (Row row : rows) {
+        sum += row.get("v", Integer.class);
+      }
+      assertEquals(120L * 121 / 2, sum);
+
+      // Repeated frames and concurrent TLS connections exercise the record handling and the
+      // partial write accounting.
+      for (int i = 0; i < 25; i++) {
+        assertEquals(
+            120,
+            Flux.from(
+                    connection
+                        .createStatement("SELECT v FROM r2dbc_tls.samples ORDER BY time")
+                        .execute())
+                .flatMap(result -> result.map((row, metadata) -> row))
+                .collectList()
+                .block()
+                .size());
+      }
+      List<Connection> concurrent = new ArrayList<>();
+      for (int i = 0; i < 4; i++) {
+        concurrent.add(Mono.from(factory.create()).block());
+      }
+      try {
+        for (Connection parallel : concurrent) {
+          assertEquals(
+              120,
+              Flux.from(
+                      parallel
+                          .createStatement("SELECT v FROM r2dbc_tls.samples ORDER BY time")
+                          .execute())
+                  .flatMap(result -> result.map((row, metadata) -> row))
+                  .collectList()
+                  .block()
+                  .size());
+        }
+      } finally {
+        for (Connection parallel : concurrent) {
+          Mono.from(parallel.close()).block();
+        }
+      }
+      assertTrue(Mono.from(connection.validate(ValidationDepth.REMOTE)).block());
+    } finally {
+      Mono.from(connection.close()).block();
+      ((IoTDBR2dbcConnectionFactory) factory).close();
+    }
+  }
+
+  @Test
+  public void untrustedCertificateFailsWithoutDowngrading() {
+    // Without a trust store the JVM default one is used, which does not trust the test certificate.
+    ConnectionFactory factory = tlsFactory(null);
+    assertThrows(
+        RuntimeException.class,
+        () -> Mono.from(factory.create()).timeout(Duration.ofSeconds(15)).block());
+    ((IoTDBR2dbcConnectionFactory) factory).close();
+  }
+
+  private static ConnectionFactory tlsFactory(String trustStore) {
+    ConnectionFactoryOptions.Builder builder =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.DRIVER, "iotdb")
+            .option(ConnectionFactoryOptions.HOST, System.getProperty("iotdb.it.host"))
+            .option(ConnectionFactoryOptions.PORT, Integer.getInteger("iotdb.it.tls.port"))
+            .option(ConnectionFactoryOptions.USER, System.getProperty("iotdb.it.user"))
+            .option(ConnectionFactoryOptions.PASSWORD, System.getProperty("iotdb.it.password"))
+            .option(ConnectionFactoryOptions.SSL, Boolean.TRUE);
+    if (trustStore != null) {
+      builder
+          .option(IoTDBConnectionFactoryOptions.TRUST_STORE, trustStore)
+          .option(
+              IoTDBConnectionFactoryOptions.TRUST_STORE_PASSWORD,
+              System.getProperty("iotdb.it.tls.trustStorePassword"));
+    }
+    return ConnectionFactories.get(builder.build());
+  }
+
+  private static void execute(Connection connection, String sql) {
+    Flux.from(connection.createStatement(sql).execute())
+        .flatMap(Result::getRowsUpdated)
+        .collectList()
+        .block();
   }
 
   @Test

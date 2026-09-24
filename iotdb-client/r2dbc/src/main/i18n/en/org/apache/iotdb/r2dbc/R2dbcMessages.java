@@ -24,6 +24,8 @@ public final class R2dbcMessages {
 
   private R2dbcMessages() {}
 
+  public static final String EXCEPTION_FAILED_TO_INITIALIZE_TLS_ARG_770BBC57 = "Failed to initialize TLS: %s";
+
   public static final String EXCEPTION_PARAMETERS_CANNOT_BE_BOUND_TO_A_STATEMENT_THAT_CONTAINS_SEVERAL_SQL_STATEMENTS_89D234C0 = "Parameters cannot be bound to a statement that contains several SQL statements";
 
   public static final String EXCEPTION_TEMPORAL_PARAMETERS_MUST_BE_CONVERTED_WITH_THE_SESSION_PRECISION_AND_TIME_ZONE_BEFORE_BINDING_90DAA184 = "Temporal parameters must be converted with the session precision and time zone before binding";
@@ -79,7 +81,6 @@ public final class R2dbcMessages {
   public static final String EXCEPTION_THE_STATEMENT_HAS_ARG_PLACEHOLDERS_BUT_ARG_PARAMETERS_WERE_SUPPLIED_1295275A = "The statement has %d placeholders but %d parameters were supplied";
   public static final String EXCEPTION_THE_STATEMENT_TIMED_OUT_AFTER_ARG_37D4D030 = "The statement timed out after %s";
   public static final String EXCEPTION_THE_STATEMENT_TIMEOUT_MUST_NOT_BE_NEGATIVE_BUT_WAS_ARG_74BD2508 = "The statement timeout must not be negative, but was %s";
-  public static final String EXCEPTION_TLS_IS_NOT_SUPPORTED_BY_THIS_DRIVER_VERSION_79D86451 = "TLS is not supported by this driver version";
   public static final String EXCEPTION_TRANSACTIONS_ARE_NOT_SUPPORTED_BY_IOTDB_C248F946 = "Transactions are not supported by IoTDB";
   public static final String EXCEPTION_TRANSACTION_ISOLATION_LEVELS_CANNOT_BE_CHANGED_BECAUSE_IOTDB_HAS_NO_CROSS_STATEMENT_TRANSACTIONS_54D87733 = "Transaction isolation levels cannot be changed because IoTDB has no cross-statement transactions";
   public static final String EXCEPTION_TYPE_MUST_NOT_BE_NULL_3C9753B3 = "type must not be null";

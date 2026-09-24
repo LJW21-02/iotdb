@@ -44,6 +44,7 @@ import org.apache.thrift.async.TAsyncClientManager;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.protocol.TCompactProtocol;
 import org.apache.thrift.protocol.TProtocolFactory;
+import org.apache.thrift.transport.TNonblockingTransport;
 import org.apache.thrift.transport.TTransportException;
 
 import java.io.IOException;
@@ -61,7 +62,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class IoTDBAsyncClient implements AutoCloseable {
 
-  private final FrameGuardSocket socket;
+  private final TNonblockingTransport socket;
+  private final FrameLimitedTransport frameLimit;
   private final IClientRPCService.AsyncClient client;
   private final AtomicBoolean inFlight = new AtomicBoolean();
 
@@ -72,18 +74,23 @@ public final class IoTDBAsyncClient implements AutoCloseable {
 
   public IoTDBAsyncClient(
       IoTDBConnectionConfiguration configuration, TAsyncClientManager clientManager) {
-    try {
-      this.socket =
-          new FrameGuardSocket(
-              configuration.host(), configuration.port(), configuration.maxFrameSize());
-    } catch (IOException | TTransportException e) {
-      throw new IoTDBR2dbcException(
-          String.format(
-              R2dbcMessages.EXCEPTION_FAILED_TO_CONNECT_TO_IOTDB_AT_ARG_ARG_2A934FC1,
-              configuration.host(),
-              configuration.port()),
-          e);
+    if (configuration.tls().enabled()) {
+      this.socket = TlsSocketFactory.create(configuration);
+    } else {
+      try {
+        this.socket =
+            new FrameGuardSocket(
+                configuration.host(), configuration.port(), configuration.maxFrameSize());
+      } catch (IOException | TTransportException e) {
+        throw new IoTDBR2dbcException(
+            String.format(
+                R2dbcMessages.EXCEPTION_FAILED_TO_CONNECT_TO_IOTDB_AT_ARG_ARG_2A934FC1,
+                configuration.host(),
+                configuration.port()),
+            e);
+      }
     }
+    this.frameLimit = (FrameLimitedTransport) socket;
     TProtocolFactory protocolFactory =
         configuration.protocol() == IoTDBConnectionConfiguration.Protocol.COMPACT
             ? new TCompactProtocol.Factory()
@@ -135,7 +142,7 @@ public final class IoTDBAsyncClient implements AutoCloseable {
 
   /** Applies the stricter of the configured and the server announced frame limit. */
   public void limitFrameSize(int serverLimit) {
-    socket.limitFrameSize(serverLimit);
+    frameLimit.limitFrameSize(serverLimit);
   }
 
   @Override

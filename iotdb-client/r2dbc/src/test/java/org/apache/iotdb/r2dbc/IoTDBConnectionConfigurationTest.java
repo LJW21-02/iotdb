@@ -90,10 +90,19 @@ public class IoTDBConnectionConfigurationTest {
   }
 
   @Test
-  public void tlsIsRejectedForBothEntryPoints() {
-    assertThrows(IoTDBR2dbcException.class, () -> from("r2dbcs:iotdb://127.0.0.1:6667/demo"));
-    assertThrows(
-        IoTDBR2dbcException.class, () -> from("r2dbc:iotdb://127.0.0.1:6667/demo?ssl=true"));
+  public void tlsIsEnabledForBothEntryPoints() {
+    assertTrue(from("r2dbcs:iotdb://127.0.0.1:6667/demo").tls().enabled());
+    assertTrue(from("r2dbc:iotdb://127.0.0.1:6667/demo?ssl=true").tls().enabled());
+    assertFalse(from("r2dbc:iotdb://127.0.0.1:6667/demo").tls().enabled());
+
+    IoTDBConnectionConfiguration configured =
+        from(
+            "r2dbc:iotdb://127.0.0.1:6667/demo?ssl=true&iotdb.trustStore=/tmp/trust.p12"
+                + "&iotdb.trustStorePassword=secret&iotdb.keyStore=/tmp/key.p12"
+                + "&iotdb.keyStorePassword=keysecret");
+    assertEquals("/tmp/trust.p12", configured.tls().trustStore());
+    assertEquals("secret", configured.tls().trustStorePassword());
+    assertEquals("/tmp/key.p12", configured.tls().keyStore());
   }
 
   @Test

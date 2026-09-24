@@ -76,6 +76,9 @@ URLs (`r2dbcs:`) are rejected at configuration time, see the capability matrix.
 | `iotdb.rpcTimeout` | Duration | `60s` | Per RPC budget. |
 | `iotdb.serverQueryTimeout` | Duration | none | Server side budget; absent follows the server default. |
 | `iotdb.cleanupTimeout` | Duration | `10s` | Cursor/handle cleanup budget. |
+| `ssl` / `r2dbcs:` | Boolean or string `true` | disabled | Enables TLS; the string `false` and any other value are rejected. |
+| `iotdb.trustStore` / `iotdb.trustStorePassword` | String | JVM default trust store | Certificate chain verification; the host name is always verified against the certificate. |
+| `iotdb.keyStore` / `iotdb.keyStorePassword` | String | none | Client certificate for mutual TLS. |
 
 Durations accept an ISO-8601 value or an integer number of milliseconds. Values from a URL are
 strings and are converted defensively; invalid, negative or conflicting values fail before any
@@ -102,7 +105,7 @@ connection is opened.
 | Result consumption | Once per result; `map`/`filter`/`flatMap`/`getRowsUpdated` share one consumption state. |
 | Transactions | Not supported (strict): `beginTransaction`, `commitTransaction`, `rollbackTransaction`, `setAutoCommit(false)` and savepoints report an error instead of succeeding silently. |
 | Update counts | Not reported by IoTDB; the count stream completes empty, `0`/`1` is never fabricated. |
-| TLS (`r2dbcs:`, `ssl=true`) | Not implemented yet and rejected at configuration time; the driver never downgrades to plaintext. A plaintext connection to a TLS endpoint fails in roughly 0.2 s with a bounded frame error (verified by `IoTDBR2dbcTlsIT` against a TLS enabled instance), instead of allocating a buffer for whatever length the TLS handshake bytes encode. |
+| TLS (`r2dbcs:`, `ssl=true`) | Supported with a non-blocking `SSLEngine` transport: the handshake, record layer and partial writes never block the selector thread, certificate chain and host name are verified, and a TLS failure is reported as an error without falling back to plaintext. Verified against a TLS enabled instance by `IoTDBR2dbcTlsIT` (paged queries, repeated frames, concurrent connections, untrusted certificate rejection) as well as a plaintext misconnect that fails in about 0.2 s with a bounded frame error. |
 | Snappy, query redirection, time and binary parameters, generated keys, named parameters, streaming LOB | Rejected with a clear error; none of them can silently fall back to a different path. |
 | Server side cancellation | Not implemented by the server; the driver stops consuming and releases the handle. |
 
@@ -156,6 +159,15 @@ documented differences (transactions and update counts) are recorded in [TCK.md]
 mvn test -pl iotdb-client/r2dbc -P with-r2dbc-tck -Dtest=IoTDBR2dbcTckTest -DfailIfNoTests=false     -Diotdb.it.host=127.0.0.1 -Diotdb.it.port=6667     -Diotdb.it.user=<user> -Diotdb.it.password=<password>
 ```
 
+## Transport notes
+
+The plaintext transport is Thrift's `TNonblockingSocket`. For TLS the driver drives an `SSLEngine`
+itself (`TlsNonblockingSocket`) instead of using Thrift's non-blocking SSL socket, whose handshake
+busy waits on the shared selector thread and whose read contract does not match the async client. The
+TLS transport only acknowledges plaintext once the matching ciphertext reached the socket, and it
+keeps the async client reading buffered plaintext by registering writability for exactly one extra
+transition, which is what Thrift's two-step frame read needs.
+
 ## Performance
 
 Median numbers, the measurement method and its limitations are recorded in
@@ -164,5 +176,5 @@ promise.
 
 ## Follow-up work
 
-TLS, Snappy, multi-node redirection, `DATE` parameter semantics, the R2DBC TCK profile and long
-running stability tests are tracked by the milestones of the design document above.
+The TLS performance arm, Snappy conclusions, multi-node redirection, `DATE` parameter semantics and
+a longer running stability suite are tracked by the milestones of the design document above.

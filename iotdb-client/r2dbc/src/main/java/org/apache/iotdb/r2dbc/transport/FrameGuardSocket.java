@@ -19,79 +19,32 @@
 
 package org.apache.iotdb.r2dbc.transport;
 
-import org.apache.iotdb.r2dbc.R2dbcMessages;
-
 import org.apache.thrift.transport.TNonblockingSocket;
 import org.apache.thrift.transport.TTransportException;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
-/**
- * A non-blocking Thrift socket that validates the length prefix of every response frame.
- *
- * <p>Thrift's async machinery allocates a buffer for the declared frame length without checking it,
- * so a bogus or malicious length can exhaust the heap and kill the shared selector thread. This
- * socket reads the four byte length prefix itself and fails the call with a controlled {@link
- * TTransportException} before any allocation happens.
- */
-final class FrameGuardSocket extends TNonblockingSocket {
+/** A plaintext non-blocking Thrift socket guarded by {@link FrameSizeGuard}. */
+final class FrameGuardSocket extends TNonblockingSocket implements FrameLimitedTransport {
 
-  private static final int FRAME_SIZE_BYTES = 4;
-
-  private volatile int maxFrameSize;
-  private boolean readingFrameSize = true;
-  private int remainingFrameBytes;
+  private final FrameSizeGuard guard;
 
   FrameGuardSocket(String host, int port, int maxFrameSize)
       throws IOException, TTransportException {
     super(host, port, 0);
-    this.maxFrameSize = maxFrameSize;
+    this.guard = new FrameSizeGuard(maxFrameSize);
   }
 
   /** Applies the stricter of the configured and the server announced frame limit. */
-  void limitFrameSize(int limit) {
-    if (limit > 0 && limit < maxFrameSize) {
-      maxFrameSize = limit;
-    }
+  public void limitFrameSize(int limit) {
+    guard.limitFrameSize(limit);
   }
 
   @Override
   public int read(ByteBuffer buffer) throws TTransportException {
-    if (!readingFrameSize) {
-      int read = super.read(buffer);
-      if (read > 0) {
-        remainingFrameBytes -= read;
-        if (remainingFrameBytes <= 0) {
-          readingFrameSize = true;
-        }
-      }
-      return read;
-    }
     int read = super.read(buffer);
-    if (read > 0 && buffer.remaining() == 0 && buffer.position() == FRAME_SIZE_BYTES) {
-      int frameSize = frameSize(buffer);
-      if (frameSize <= 0 || frameSize > maxFrameSize) {
-        throw new TTransportException(
-            frameSize <= 0
-                ? String.format(
-                    R2dbcMessages.EXCEPTION_RECEIVED_AN_INVALID_FRAME_SIZE_ARG_280DE971, frameSize)
-                : String.format(
-                    R2dbcMessages
-                        .EXCEPTION_RECEIVED_A_FRAME_OF_ARG_BYTES_WHICH_EXCEEDS_THE_CONFIGURED_LIMIT_OF_ARG_BYTES_FEBB2338,
-                    frameSize,
-                    maxFrameSize));
-      }
-      remainingFrameBytes = frameSize;
-      readingFrameSize = false;
-    }
+    guard.afterRead(buffer, read);
     return read;
-  }
-
-  private static int frameSize(ByteBuffer buffer) {
-    return ((buffer.get(0) & 0xFF) << 24)
-        | ((buffer.get(1) & 0xFF) << 16)
-        | ((buffer.get(2) & 0xFF) << 8)
-        | (buffer.get(3) & 0xFF);
   }
 }
