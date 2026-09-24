@@ -54,6 +54,9 @@ public final class IoTDBConnectionFactoryOptions {
   /** Budget for closing a query handle, defaults to 10 seconds. */
   public static final Option<Duration> CLEANUP_TIMEOUT = Option.valueOf("iotdb.cleanupTimeout");
 
+  /** Maximum number of server recommended redirections followed for one statement, default 3. */
+  public static final Option<Integer> MAX_REDIRECTS = Option.valueOf("iotdb.maxRedirects");
+
   /** PKCS#12/JKS trust store used to verify the server certificate; defaults to the JVM store. */
   public static final Option<String> TRUST_STORE = Option.valueOf("iotdb.trustStore");
 

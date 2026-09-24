@@ -72,24 +72,36 @@ public final class IoTDBAsyncClient implements AutoCloseable {
     void send(AsyncMethodCallback<T> callback) throws TException;
   }
 
-  public IoTDBAsyncClient(
-      IoTDBConnectionConfiguration configuration, TAsyncClientManager clientManager) {
+  /**
+   * Creates a transport for one endpoint, transparently choosing plaintext or TLS, and wraps it in
+   * the Thrift async client.
+   */
+  public static IoTDBAsyncClient connect(
+      IoTDBConnectionConfiguration configuration,
+      TAsyncClientManager clientManager,
+      String host,
+      int port) {
+    TNonblockingTransport transport;
     if (configuration.tls().enabled()) {
-      this.socket = TlsSocketFactory.create(configuration);
+      transport = TlsSocketFactory.create(configuration, host, port);
     } else {
       try {
-        this.socket =
-            new FrameGuardSocket(
-                configuration.host(), configuration.port(), configuration.maxFrameSize());
+        transport = new FrameGuardSocket(host, port, configuration.maxFrameSize());
       } catch (IOException | TTransportException e) {
         throw new IoTDBR2dbcException(
             String.format(
-                R2dbcMessages.EXCEPTION_FAILED_TO_CONNECT_TO_IOTDB_AT_ARG_ARG_2A934FC1,
-                configuration.host(),
-                configuration.port()),
+                R2dbcMessages.EXCEPTION_FAILED_TO_CONNECT_TO_IOTDB_AT_ARG_ARG_2A934FC1, host, port),
             e);
       }
     }
+    return new IoTDBAsyncClient(configuration, clientManager, transport);
+  }
+
+  private IoTDBAsyncClient(
+      IoTDBConnectionConfiguration configuration,
+      TAsyncClientManager clientManager,
+      TNonblockingTransport transport) {
+    this.socket = transport;
     this.frameLimit = (FrameLimitedTransport) socket;
     TProtocolFactory protocolFactory =
         configuration.protocol() == IoTDBConnectionConfiguration.Protocol.COMPACT

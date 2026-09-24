@@ -76,6 +76,7 @@ URLs (`r2dbcs:`) are rejected at configuration time, see the capability matrix.
 | `iotdb.rpcTimeout` | Duration | `60s` | Per RPC budget. |
 | `iotdb.serverQueryTimeout` | Duration | none | Server side budget; absent follows the server default. |
 | `iotdb.cleanupTimeout` | Duration | `10s` | Cursor/handle cleanup budget. |
+| `iotdb.maxRedirects` | Integer | `3` | How many server recommended redirections one statement may follow. |
 | `ssl` / `r2dbcs:` | Boolean or string `true` | disabled | Enables TLS; the string `false` and any other value are rejected. |
 | `iotdb.trustStore` / `iotdb.trustStorePassword` | String | JVM default trust store | Certificate chain verification; the host name is always verified against the certificate. |
 | `iotdb.keyStore` / `iotdb.keyStorePassword` | String | none | Client certificate for mutual TLS. |
@@ -106,7 +107,8 @@ connection is opened.
 | Transactions | Not supported (strict): `beginTransaction`, `commitTransaction`, `rollbackTransaction`, `setAutoCommit(false)` and savepoints report an error instead of succeeding silently. |
 | Update counts | Not reported by IoTDB; the count stream completes empty, `0`/`1` is never fabricated. |
 | TLS (`r2dbcs:`, `ssl=true`) | Supported with a non-blocking `SSLEngine` transport: the handshake, record layer and partial writes never block the selector thread, certificate chain and host name are verified, and a TLS failure is reported as an error without falling back to plaintext. Verified against a TLS enabled instance by `IoTDBR2dbcTlsIT` (paged queries, repeated frames, concurrent connections, untrusted certificate rejection) as well as a plaintext misconnect that fails in about 0.2 s with a bounded frame error. |
-| Snappy, query redirection, time and binary parameters, generated keys, named parameters, streaming LOB | Rejected with a clear error; none of them can silently fall back to a different path. |
+| Multi node redirection | A DataNode that does not host the data recommends another node; the driver re-establishes the session there (dialect, database, time zone) and re-sends the statement, at most `iotdb.maxRedirects` hops. A response that recommends several different nodes for one request is rejected instead of replaying part of it. Verified against a 1C3D cluster by `IoTDBR2dbcClusterIT`; typed prepared statements are not redirected yet and report the recommendation as an error. |
+| Snappy, time and binary parameters, generated keys, named parameters, streaming LOB | Rejected with a clear error; none of them can silently fall back to a different path. |
 | Server side cancellation | Not implemented by the server; the driver stops consuming and releases the handle. |
 
 ## Build and test

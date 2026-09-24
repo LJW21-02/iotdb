@@ -24,6 +24,10 @@ public final class R2dbcMessages {
 
   private R2dbcMessages() {}
 
+  public static final String EXCEPTION_A_PARTIALLY_REDIRECTED_MULTI_DEVICE_RESPONSE_CANNOT_BE_REPLAYED_SAFELY_162D6946 = "A partially redirected multi device response cannot be replayed safely";
+
+  public static final String EXCEPTION_THE_REDIRECTION_BUDGET_OF_ARG_HOPS_IS_EXHAUSTED_344A9A03 = "The redirection budget of %d hops is exhausted";
+
   public static final String EXCEPTION_FAILED_TO_INITIALIZE_TLS_ARG_770BBC57 = "Failed to initialize TLS: %s";
 
   public static final String EXCEPTION_PARAMETERS_CANNOT_BE_BOUND_TO_A_STATEMENT_THAT_CONTAINS_SEVERAL_SQL_STATEMENTS_89D234C0 = "Parameters cannot be bound to a statement that contains several SQL statements";

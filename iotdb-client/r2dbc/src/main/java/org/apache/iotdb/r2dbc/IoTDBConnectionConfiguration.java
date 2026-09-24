@@ -52,7 +52,8 @@ public record IoTDBConnectionConfiguration(
     Duration serverQueryTimeout,
     Duration cleanupTimeout,
     int fetchSize,
-    int maxFrameSize) {
+    int maxFrameSize,
+    int maxRedirects) {
 
   public static final String DRIVER = "iotdb";
   private static final String DEFAULT_HOST = "localhost";
@@ -62,6 +63,7 @@ public record IoTDBConnectionConfiguration(
   private static final Duration DEFAULT_CLEANUP_TIMEOUT = Duration.ofSeconds(10);
   private static final int DEFAULT_FETCH_SIZE = 1024;
   private static final int DEFAULT_MAX_FRAME_SIZE = 24 * 1024 * 1024;
+  private static final int DEFAULT_MAX_REDIRECTS = 3;
 
   /** Server side SQL dialect. */
   public enum SqlDialect {
@@ -113,7 +115,9 @@ public record IoTDBConnectionConfiguration(
         duration(
             options, IoTDBConnectionFactoryOptions.CLEANUP_TIMEOUT, DEFAULT_CLEANUP_TIMEOUT, false),
         positiveInt(options, IoTDBConnectionFactoryOptions.FETCH_SIZE, DEFAULT_FETCH_SIZE),
-        positiveInt(options, IoTDBConnectionFactoryOptions.MAX_FRAME_SIZE, DEFAULT_MAX_FRAME_SIZE));
+        positiveInt(options, IoTDBConnectionFactoryOptions.MAX_FRAME_SIZE, DEFAULT_MAX_FRAME_SIZE),
+        nonNegativeInt(
+            options, IoTDBConnectionFactoryOptions.MAX_REDIRECTS, DEFAULT_MAX_REDIRECTS));
   }
 
   /**
@@ -261,6 +265,23 @@ public record IoTDBConnectionConfiguration(
             R2dbcMessages.EXCEPTION_OPTION_ARG_MUST_BE_AN_INTEGER_BUT_WAS_ARG_1CAFFF31,
             option.name(),
             value));
+  }
+
+  private static int nonNegativeInt(
+      ConnectionFactoryOptions options, Option<Integer> option, int defaultValue) {
+    Object value = options.getValue(option);
+    if (value == null) {
+      return defaultValue;
+    }
+    int parsed = intValue(option, value);
+    if (parsed < 0) {
+      throw new IoTDBR2dbcException(
+          String.format(
+              R2dbcMessages.EXCEPTION_OPTION_ARG_MUST_NOT_BE_NEGATIVE_BUT_WAS_ARG_28DA7D3A,
+              option.name(),
+              value));
+    }
+    return parsed;
   }
 
   private static int positiveInt(

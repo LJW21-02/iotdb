@@ -24,6 +24,10 @@ public final class R2dbcMessages {
 
   private R2dbcMessages() {}
 
+  public static final String EXCEPTION_A_PARTIALLY_REDIRECTED_MULTI_DEVICE_RESPONSE_CANNOT_BE_REPLAYED_SAFELY_162D6946 = "多设备响应发生部分重定向，无法安全重放";
+
+  public static final String EXCEPTION_THE_REDIRECTION_BUDGET_OF_ARG_HOPS_IS_EXHAUSTED_344A9A03 = "%d 次重定向预算已用尽";
+
   public static final String EXCEPTION_FAILED_TO_INITIALIZE_TLS_ARG_770BBC57 = "初始化 TLS 失败：%s";
 
   public static final String EXCEPTION_PARAMETERS_CANNOT_BE_BOUND_TO_A_STATEMENT_THAT_CONTAINS_SEVERAL_SQL_STATEMENTS_89D234C0 = "包含多条 SQL 语句的 Statement 不能绑定参数";

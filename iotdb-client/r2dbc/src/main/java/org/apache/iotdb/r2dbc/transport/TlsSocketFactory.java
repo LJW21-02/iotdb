@@ -50,10 +50,10 @@ final class TlsSocketFactory {
 
   private TlsSocketFactory() {}
 
-  static TlsNonblockingSocket create(IoTDBConnectionConfiguration configuration) {
+  static TlsNonblockingSocket create(
+      IoTDBConnectionConfiguration configuration, String host, int port) {
     TlsConfiguration tls = configuration.tls();
-    SSLEngine engine =
-        createContext(tls).createSSLEngine(configuration.host(), configuration.port());
+    SSLEngine engine = createContext(tls).createSSLEngine(host, port);
     engine.setUseClientMode(true);
     SSLParameters parameters = engine.getSSLParameters();
     // Verify the certificate chain and the host name during the handshake.
@@ -65,10 +65,7 @@ final class TlsSocketFactory {
       channel.socket().setTcpNoDelay(true);
       channel.socket().setKeepAlive(true);
       return new TlsNonblockingSocket(
-          configuration.maxFrameSize(),
-          engine,
-          channel,
-          new InetSocketAddress(configuration.host(), configuration.port()));
+          configuration.maxFrameSize(), engine, channel, new InetSocketAddress(host, port));
     } catch (IOException | TTransportException e) {
       throw tlsFailure(e);
     }

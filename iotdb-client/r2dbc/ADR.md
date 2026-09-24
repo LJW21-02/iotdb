@@ -46,7 +46,7 @@ provided.
 | Blocking `Session` plus a bounded thread pool | Satisfies reactive behaviour but not non-blocking I/O; it also does not remove server side worker usage. Kept as the measurement baseline only. |
 | Thrift's `TNonblockingSSLSocket` | Its handshake busy waits on the shared selector thread, and its `read` returns the requested length instead of the bytes read, which does not match what the async client expects. Verified from the 0.24.0 bytecode in the design investigation. |
 | Netty + Thrift codecs | Follows the design document's preference and gives a mature TLS stack, but the generated async client is bound to `TNonblockingTransport` + `TAsyncClientManager`; a Netty transport means re-implementing serialization and response dispatch per RPC method (about 1–2 person weeks) and replacing a transport that is already verified end to end. Revisit when the trigger below fires. |
-| Following server redirects | The driver disables redirect queries and reports a redirection status as an error instead of silently re-sending; result-unknown writes must not be replayed. Multi node redirection needs a cluster experiment and a budget policy (open item). |
+| Following server redirects without a policy | Unbounded re-sending can duplicate writes and loop between nodes. The driver follows a recommendation only for a request that has not been executed, at most `iotdb.maxRedirects` times, re-establishes the session on the target node, and rejects a response that recommends several different nodes for one request. Verified against a 1C3D cluster. |
 
 ## Evidence
 
@@ -97,6 +97,9 @@ update count differences, and 6 further tests are excluded with reasons.
 
 - The transport is reusable for plaintext and TLS with the same async client, request serialization
   and cleanup path.
+- Redirection replaces the session of a connection (new socket, `openSession`, statement id) and is
+  bounded per statement; a prepared statement is not redirected yet, because its server side handle
+  lives on the original node, and reports the recommendation as an error instead.
 - `TlsNonblockingSocket` is a hand written state machine (handshake, record layer, partial write
   accounting, and one extra transition so Thrift can read a frame body from buffered plaintext). This
   is the main maintenance cost of the decision and the main argument for Netty if it grows.

@@ -19,6 +19,8 @@
 
 package org.apache.iotdb.r2dbc.client;
 
+import org.apache.iotdb.common.rpc.thrift.TEndPoint;
+import org.apache.iotdb.common.rpc.thrift.TSStatus;
 import org.apache.iotdb.r2dbc.IoTDBConnectionConfiguration;
 import org.apache.iotdb.r2dbc.R2dbcMessages;
 import org.apache.iotdb.r2dbc.codec.LiteralBinder;
@@ -62,9 +64,11 @@ import reactor.core.scheduler.Scheduler;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -90,12 +94,13 @@ public final class IoTDBConnection implements Connection, Lifecycle {
   private static final String PRECISION_NANOSECOND = "ns";
 
   private final IoTDBConnectionConfiguration configuration;
-  private final IoTDBAsyncClient client;
+  private final TAsyncClientManager manager;
+  private volatile IoTDBAsyncClient client;
   private final Scheduler scheduler;
-  private final long sessionId;
-  private final long statementId;
-  private final int timeFactor;
-  private final String serverVersion;
+  private volatile long sessionId;
+  private volatile long statementId;
+  private volatile int timeFactor;
+  private volatile String serverVersion;
   private final AtomicBoolean open = new AtomicBoolean(true);
   private final AtomicBoolean statementActive = new AtomicBoolean();
   private final AtomicLong preparedStatementCounter = new AtomicLong();
@@ -108,10 +113,12 @@ public final class IoTDBConnection implements Connection, Lifecycle {
 
   private IoTDBConnection(
       IoTDBConnectionConfiguration configuration,
+      TAsyncClientManager manager,
       IoTDBAsyncClient client,
       Scheduler scheduler,
       Handshake handshake) {
     this.configuration = configuration;
+    this.manager = manager;
     this.client = client;
     this.scheduler = scheduler;
     this.sessionId = handshake.sessionId;
@@ -128,7 +135,8 @@ public final class IoTDBConnection implements Connection, Lifecycle {
       IoTDBConnectionConfiguration configuration,
       TAsyncClientManager clientManager,
       Scheduler scheduler) {
-    IoTDBAsyncClient client = new IoTDBAsyncClient(configuration, clientManager);
+    IoTDBAsyncClient client =
+        createClient(configuration, configuration.host(), configuration.port(), clientManager);
     return Mono.fromCompletionStage(() -> handshake(configuration, client))
         .timeout(configuration.connectTimeout())
         .onErrorMap(
@@ -139,7 +147,9 @@ public final class IoTDBConnection implements Connection, Lifecycle {
                         R2dbcMessages.EXCEPTION_THE_CONNECTION_ATTEMPT_TIMED_OUT_AFTER_ARG_EB558B68,
                         configuration.connectTimeout())))
         .doOnError(error -> client.close())
-        .map(handshake -> new IoTDBConnection(configuration, client, scheduler, handshake));
+        .map(
+            handshake ->
+                new IoTDBConnection(configuration, clientManager, client, scheduler, handshake));
   }
 
   private static CompletableFuture<Handshake> handshake(
@@ -324,16 +334,117 @@ public final class IoTDBConnection implements Connection, Lifecycle {
   }
 
   private Mono<TSExecuteStatementResp> executeStatement(String sql, int fetchSize) {
+    // A DataNode that does not host the data recommends another node; that recommendation arrives
+    // before execution, so the request may be re-sent there under a bounded budget.
+    return followRedirects(
+            client -> client.executeStatement(buildExecuteRequest(sql, fetchSize)),
+            TSExecuteStatementResp::getStatus,
+            configuration.maxRedirects())
+        .doOnNext(response -> ExceptionMapper.verifySuccess(response.getStatus(), sql));
+  }
+
+  private TSExecuteStatementReq buildExecuteRequest(String sql, int fetchSize) {
     TSExecuteStatementReq request =
         new TSExecuteStatementReq(sessionId, sql, statementId)
             .setFetchSize(fetchSize)
-            .setEnableRedirectQuery(false);
+            .setEnableRedirectQuery(true);
     long serverTimeout = serverQueryTimeoutMillis();
     if (serverTimeout > 0) {
       request.setTimeout(serverTimeout);
     }
-    return call(client -> client.executeStatement(request))
-        .doOnNext(response -> ExceptionMapper.verifySuccess(response.getStatus(), sql));
+    return request;
+  }
+
+  /** Follows server recommended redirections for a request that has not been executed yet. */
+  private <T> Mono<T> followRedirects(
+      Function<IoTDBAsyncClient, CompletableFuture<T>> rpc,
+      Function<T, TSStatus> statusOf,
+      int budget) {
+    return Mono.defer(
+        () ->
+            call(rpc)
+                .flatMap(
+                    response -> {
+                      TSStatus status = statusOf.apply(response);
+                      TEndPoint target = redirectTarget(status);
+                      if (target == null) {
+                        if (status != null && status.isSetSubStatus()) {
+                          // Several different nodes are recommended for one request: re-sending the
+                          // whole request to one of them could apply part of it twice.
+                          return Mono.error(
+                              new IoTDBR2dbcException(
+                                  R2dbcMessages
+                                      .EXCEPTION_A_PARTIALLY_REDIRECTED_MULTI_DEVICE_RESPONSE_CANNOT_BE_REPLAYED_SAFELY_162D6946));
+                        }
+                        return Mono.just(response);
+                      }
+                      if (budget <= 0) {
+                        return Mono.error(
+                            new IoTDBR2dbcException(
+                                String.format(
+                                    R2dbcMessages
+                                        .EXCEPTION_THE_REDIRECTION_BUDGET_OF_ARG_HOPS_IS_EXHAUSTED_344A9A03,
+                                    configuration.maxRedirects())));
+                      }
+                      return switchSession(target)
+                          .then(Mono.defer(() -> followRedirects(rpc, statusOf, budget - 1)));
+                    }));
+  }
+
+  /**
+   * Returns the node a request should be re-sent to.
+   *
+   * <p>Queries carry the recommended node in the status itself; relational writes carry one entry
+   * per device in {@code subStatus}, and only a single distinct target can be followed without
+   * splitting the write.
+   */
+  private static TEndPoint redirectTarget(TSStatus status) {
+    if (status == null) {
+      return null;
+    }
+    if (status.isSetRedirectNode()) {
+      return status.getRedirectNode();
+    }
+    if (!status.isSetSubStatus()) {
+      return null;
+    }
+    Set<TEndPoint> targets = new LinkedHashSet<>();
+    for (TSStatus subStatus : status.getSubStatus()) {
+      if (subStatus != null && subStatus.isSetRedirectNode()) {
+        targets.add(subStatus.getRedirectNode());
+      }
+    }
+    return targets.size() == 1 ? targets.iterator().next() : null;
+  }
+
+  /** Replaces the session with one on the recommended node; the previous socket is closed. */
+  private Mono<Void> switchSession(TEndPoint endpoint) {
+    return Mono.defer(
+        () -> {
+          if (activeCursor != null) {
+            return Mono.error(stillHasActiveResult());
+          }
+          IoTDBAsyncClient previous = client;
+          IoTDBAsyncClient replacement;
+          try {
+            replacement =
+                createClient(configuration, endpoint.getIp(), endpoint.getPort(), manager);
+          } catch (RuntimeException e) {
+            return Mono.error(e);
+          }
+          return Mono.fromCompletionStage(() -> handshake(configuration, replacement))
+              .timeout(configuration.connectTimeout())
+              .doOnNext(
+                  handshake -> {
+                    client = replacement;
+                    sessionId = handshake.sessionId;
+                    statementId = handshake.statementId;
+                    timeFactor = handshake.timeFactor;
+                    serverVersion = handshake.serverVersion;
+                  })
+              .doOnError(error -> replacement.close())
+              .then(Mono.fromRunnable(previous::close));
+        });
   }
 
   private Mono<TSExecuteStatementResp> executePreparedStatement(
@@ -461,6 +572,15 @@ public final class IoTDBConnection implements Connection, Lifecycle {
       rpcTail = future.handle((value, error) -> (Void) null);
     }
     return Mono.fromCompletionStage(future);
+  }
+
+  /** Creates a transport for one endpoint; TLS uses the same configuration for the new host. */
+  private static IoTDBAsyncClient createClient(
+      IoTDBConnectionConfiguration configuration,
+      String host,
+      int port,
+      TAsyncClientManager clientManager) {
+    return IoTDBAsyncClient.connect(configuration, clientManager, host, port);
   }
 
   private static Object[] encodedValues(List<ParameterBinding> parameters) {
