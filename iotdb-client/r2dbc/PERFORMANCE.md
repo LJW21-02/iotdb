@@ -66,6 +66,32 @@ throughput and 24% of the 16 connection throughput for the driver (the session c
 6%): the handshake and the per record encryption are additional work on the same selector thread,
 and the session client encrypts inside its blocking write. The thread saving is unchanged.
 
+### RTT arm (TCP level delay)
+
+The workload is reduced for these arms (100 rows per query, 40 queries, 8 connections) so the run
+stays short while latency is injected. A TCP level proxy (`rtt_proxy.py`) delays every received chunk
+by the configured amount in both directions, so the same injection works for plaintext and TLS and
+does not depend on parsing Thrift frames; the proxy is the only change, both clients keep their
+normal configuration.
+
+| Arm | 10 ms/chunk: qps, p50/p95 | 50 ms/chunk: qps, p50/p95 |
+|-|-|-|
+| r2dbc plaintext | 8.8, 108.89 / 155.99 ms | 2.7, 371.77 / 387.14 ms |
+| r2dbc TLS | not measured | 2.6, 373.23 / 559.28 ms |
+| session plaintext | 12.8, 77.29 / 83.06 ms | 4.0, 248.37 / 251.93 ms |
+| session TLS | not measured | 3.7, 248.24 / 377.66 ms |
+
+Observations:
+
+- TLS adds almost nothing once RTT dominates (373.2 ms versus 371.8 ms at 50 ms per chunk), which is
+  the expected shape: the handshake and record encryption are per connection and per record costs,
+  not per round trip.
+- Under RTT the driver has a higher per query latency than the session baseline (371.8 ms versus
+  248.4 ms at 50 ms per chunk). Part of that is one extra fetch round trip that the paging protocol
+  needs to observe the empty final page, and part is the extra transitions of the non-blocking path;
+  this is an observation to investigate, not a tuned result, and the parallel arm (21.5 qps at
+  50 ms) still scales across connections.
+
 Raw rounds:
 
 | Round | r2dbc seq qps | r2dbc seq p50/p95 | r2dbc parallel qps | session seq qps | session seq p50/p95 |
@@ -91,8 +117,9 @@ Raw rounds:
   stack (the driver decodes per row and dispatches callbacks on a bounded scheduler, the session
   client is a blocking RPC client). The design document requires a shared codec and a synchronous
   baseline before attributing a difference to the transport.
-- The **RTT arms are not measured yet**, and the TLS arm uses the same single machine, so it does
-  not represent a network TLS deployment.
+- The RTT arms use an in-process TCP proxy on the same machine, which measures an injected transport
+  delay rather than a real WAN path, and they run a reduced workload, so they are not comparable to
+  the main table above.
 - A single machine, a single instance and one workload shape (small row batch, no slow consumer, no
   overload) are not enough to state a general throughput or tail latency claim. The absolute values
   are also machine specific.

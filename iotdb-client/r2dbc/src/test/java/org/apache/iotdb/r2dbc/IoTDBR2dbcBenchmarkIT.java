@@ -57,10 +57,13 @@ import static org.junit.Assert.assertTrue;
 public class IoTDBR2dbcBenchmarkIT {
 
   private static final String DATABASE = "r2dbc_bench";
-  private static final int ROWS = 500;
-  private static final int QUERIES = 200;
-  private static final int PARALLEL_CONNECTIONS = 16;
-  private static final int PARALLEL_QUERIES = 10;
+  // Configurable so the RTT arms can keep the run short while the latency is injected.
+  private static final int ROWS = Integer.getInteger("iotdb.it.bench.rows", 500);
+  private static final int QUERIES = Integer.getInteger("iotdb.it.bench.queries", 200);
+  private static final int PARALLEL_CONNECTIONS =
+      Integer.getInteger("iotdb.it.bench.connections", 16);
+  private static final int PARALLEL_QUERIES =
+      Integer.getInteger("iotdb.it.bench.parallelQueries", 10);
   private static final int FETCH_SIZE = 50;
   private static final long EXPECTED_SUM = (long) ROWS * (ROWS + 1) / 2;
 
