@@ -172,6 +172,12 @@ documented differences (transactions and update counts) are recorded in [TCK.md]
 mvn test -pl iotdb-client/r2dbc -P with-r2dbc-tck -Dtest=IoTDBR2dbcTckTest -DfailIfNoTests=false     -Diotdb.it.host=127.0.0.1 -Diotdb.it.port=6667     -Diotdb.it.user=<user> -Diotdb.it.password=<password>
 ```
 
+## Decision record
+
+[ADR.md](ADR.md) records why the driver uses the Thrift async client with a driver owned TLS
+transport, the alternatives that were rejected, the blocking/frame/TLS evidence and the trigger for
+re-evaluating the Netty option.
+
 ## Transport notes
 
 The plaintext transport is Thrift's `TNonblockingSocket`. For TLS the driver drives an `SSLEngine`
