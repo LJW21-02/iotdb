@@ -156,6 +156,12 @@ documented differences (transactions and update counts) are recorded in [TCK.md]
 mvn test -pl iotdb-client/r2dbc -P with-r2dbc-tck -Dtest=IoTDBR2dbcTckTest -DfailIfNoTests=false     -Diotdb.it.host=127.0.0.1 -Diotdb.it.port=6667     -Diotdb.it.user=<user> -Diotdb.it.password=<password>
 ```
 
+## Performance
+
+Median numbers, the measurement method and its limitations are recorded in
+[PERFORMANCE.md](PERFORMANCE.md); they are evidence for the non-blocking design, not a throughput
+promise.
+
 ## Follow-up work
 
 TLS, Snappy, multi-node redirection, `DATE` parameter semantics, the R2DBC TCK profile and long

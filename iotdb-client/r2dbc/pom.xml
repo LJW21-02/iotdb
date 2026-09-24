@@ -81,6 +81,13 @@
             <artifactId>r2dbc-pool</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- The blocking session client is the ecosystem baseline for the benchmark IT. -->
+        <dependency>
+            <groupId>org.apache.iotdb</groupId>
+            <artifactId>iotdb-session</artifactId>
+            <version>2.0.11-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
