@@ -1,0 +1,120 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+package org.apache.iotdb.r2dbc;
+
+import io.r2dbc.spi.ConnectionFactories;
+import io.r2dbc.spi.ConnectionFactory;
+import io.r2dbc.spi.ConnectionFactoryOptions;
+import org.apache.thrift.transport.TTransportException;
+import org.junit.Assume;
+import org.junit.BeforeClass;
+import org.junit.Test;
+import reactor.core.publisher.Mono;
+
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManagerFactory;
+
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.KeyStore;
+import java.time.Duration;
+
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
+
+/**
+ * Checks the frame guard against a TLS enabled instance: the endpoint must really speak TLS, and a
+ * plaintext driver connection to it must fail fast with a bounded frame error instead of allocating
+ * a buffer for whatever length the TLS handshake bytes happen to encode (the prototype OOM case).
+ *
+ * <p>Needs a TLS enabled instance and is skipped unless the TLS options are given:
+ *
+ * <pre>
+ * mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcTlsIT -DfailIfNoTests=false \
+ *     -Diotdb.it.host=127.0.0.1 -Diotdb.it.tls.port=16667 -Diotdb.it.user=&lt;user&gt; \
+ *     -Diotdb.it.password=&lt;password&gt; -Diotdb.it.tls.trustStore=/path/trust.p12 \
+ *     -Diotdb.it.tls.trustStorePassword=&lt;password&gt;
+ * </pre>
+ */
+public class IoTDBR2dbcTlsIT {
+
+  @BeforeClass
+  public static void requireTlsServer() {
+    Assume.assumeTrue(System.getProperty("iotdb.it.tls.port") != null);
+    Assume.assumeTrue(System.getProperty("iotdb.it.tls.trustStore") != null);
+  }
+
+  @Test
+  public void tlsEndpointRejectsAPlaintextConnectionWithABoundedFrameError() {
+    ConnectionFactoryOptions options =
+        ConnectionFactoryOptions.builder()
+            .option(ConnectionFactoryOptions.DRIVER, "iotdb")
+            .option(ConnectionFactoryOptions.HOST, System.getProperty("iotdb.it.host"))
+            .option(ConnectionFactoryOptions.PORT, Integer.getInteger("iotdb.it.tls.port"))
+            .option(ConnectionFactoryOptions.USER, System.getProperty("iotdb.it.user"))
+            .option(ConnectionFactoryOptions.PASSWORD, System.getProperty("iotdb.it.password"))
+            .build();
+    ConnectionFactory factory = ConnectionFactories.get(options);
+    try {
+      RuntimeException error =
+          assertThrows(
+              RuntimeException.class,
+              () -> Mono.from(factory.create()).timeout(Duration.ofSeconds(10)).block());
+      Throwable root = error;
+      while (root.getCause() != null) {
+        root = root.getCause();
+      }
+      assertTrue(
+          "the connection must fail with a controlled transport error, but was " + root,
+          root instanceof TTransportException);
+      assertTrue(
+          "the frame guard must reject the oversized length, message was: " + root.getMessage(),
+          root.getMessage().contains("frame"));
+    } finally {
+      ((IoTDBR2dbcConnectionFactory) factory).close();
+    }
+  }
+
+  @Test
+  public void tlsEndpointReallySpeaksTls() throws Exception {
+    KeyStore trustStore = KeyStore.getInstance("PKCS12");
+    try (InputStream input =
+        Files.newInputStream(Path.of(System.getProperty("iotdb.it.tls.trustStore")))) {
+      trustStore.load(input, System.getProperty("iotdb.it.tls.trustStorePassword").toCharArray());
+    }
+    TrustManagerFactory trustManagerFactory =
+        TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+    trustManagerFactory.init(trustStore);
+    SSLContext context = SSLContext.getInstance("TLS");
+    context.init(null, trustManagerFactory.getTrustManagers(), null);
+    try (SSLSocket socket =
+        (SSLSocket)
+            context
+                .getSocketFactory()
+                .createSocket(
+                    System.getProperty("iotdb.it.host"), Integer.getInteger("iotdb.it.tls.port"))) {
+      // Throws when the endpoint is not TLS or the certificate is not trusted.
+      socket.startHandshake();
+      assertTrue(socket.getSession().isValid());
+    }
+  }
+}

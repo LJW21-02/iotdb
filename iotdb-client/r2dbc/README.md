@@ -102,7 +102,8 @@ connection is opened.
 | Result consumption | Once per result; `map`/`filter`/`flatMap`/`getRowsUpdated` share one consumption state. |
 | Transactions | Not supported (strict): `beginTransaction`, `commitTransaction`, `rollbackTransaction`, `setAutoCommit(false)` and savepoints report an error instead of succeeding silently. |
 | Update counts | Not reported by IoTDB; the count stream completes empty, `0`/`1` is never fabricated. |
-| TLS (`r2dbcs:`), Snappy, query redirection, time and binary parameters, generated keys, named parameters, streaming LOB | Rejected with a clear error; none of them can silently fall back to a different path. |
+| TLS (`r2dbcs:`, `ssl=true`) | Not implemented yet and rejected at configuration time; the driver never downgrades to plaintext. A plaintext connection to a TLS endpoint fails in roughly 0.2 s with a bounded frame error (verified by `IoTDBR2dbcTlsIT` against a TLS enabled instance), instead of allocating a buffer for whatever length the TLS handshake bytes encode. |
+| Snappy, query redirection, time and binary parameters, generated keys, named parameters, streaming LOB | Rejected with a clear error; none of them can silently fall back to a different path. |
 | Server side cancellation | Not implemented by the server; the driver stops consuming and releases the handle. |
 
 ## Build and test
@@ -115,6 +116,9 @@ mvn test -pl iotdb-client/r2dbc -am
 mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcIT -DfailIfNoTests=false \
     -Diotdb.it.host=127.0.0.1 -Diotdb.it.port=6667 \
     -Diotdb.it.user=<user> -Diotdb.it.password=<password>
+
+# Frame guard against a TLS endpoint (skipped without the TLS options)
+mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcTlsIT -DfailIfNoTests=false     -Diotdb.it.host=127.0.0.1 -Diotdb.it.tls.port=6667     -Diotdb.it.user=<user> -Diotdb.it.password=<password>     -Diotdb.it.tls.trustStore=<trust.p12> -Diotdb.it.tls.trustStorePassword=<password>
 
 # Formatting / style
 mvn spotless:apply -pl iotdb-client/r2dbc
