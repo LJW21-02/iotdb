@@ -145,8 +145,21 @@ Flux<Integer> values =
         .all();
 ```
 
-Verified with `spring-r2dbc` 6.1.13 against a live instance: the default builder fails exactly as
-documented, while the explicit client executes a parameterised query and returns the expected rows.
+### Spring Boot sample
+
+`IoTDBR2dbcSpringBootSampleIT` (profile `with-r2dbc-spring`) starts a real Boot application context
+that discovers the driver through the ServiceLoader, lets Boot build the `ConnectionFactory` bean
+(including the `r2dbc-pool` wrapper) and runs explicit SQL through a `DatabaseClient` bean:
+
+```bash
+mvn test -pl iotdb-client/r2dbc -P with-r2dbc-spring -Dtest=IoTDBR2dbcSpringBootSampleIT     -DfailIfNoTests=false -Diotdb.it.host=127.0.0.1 -Diotdb.it.port=6667     -Diotdb.it.user=<user> -Diotdb.it.password=<password>
+```
+
+The same test asserts the documented limitation: without the explicit bean, Boot's default
+`DatabaseClient` auto configuration fails with `NoBindMarkersFactoryException`, because the driver
+publishes no Spring types. Verified versions: Boot 3.3.8, Spring 6.1.13, R2DBC SPI 1.0.0.RELEASE,
+r2dbc-pool 1.0.2.RELEASE, Reactor 3.7.19.
+
 Values bound by frameworks arrive as `io.r2dbc.spi.Parameter`; the driver unwraps them, and a typed
 null becomes a `bindNull` for the declared type.
 
