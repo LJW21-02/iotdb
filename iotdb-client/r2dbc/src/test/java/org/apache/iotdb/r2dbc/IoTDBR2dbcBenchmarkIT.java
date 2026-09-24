@@ -88,7 +88,12 @@ public class IoTDBR2dbcBenchmarkIT {
         sequentialLatencies.add(System.nanoTime() - queryStart);
       }
       double sequentialSeconds = (System.nanoTime() - start) / 1_000_000_000.0;
-      report("r2dbc sequential", QUERIES, sequentialSeconds, sequentialLatencies, 0);
+      report(
+          "r2dbc" + transportLabel() + " sequential",
+          QUERIES,
+          sequentialSeconds,
+          sequentialLatencies,
+          0);
 
       // Sixteen connections with an active result each: a thread per waiting request would need at
       // least sixteen extra threads, the shared selector runtime does not.
@@ -117,7 +122,7 @@ public class IoTDBR2dbcBenchmarkIT {
           assertEquals(EXPECTED_SUM * PARALLEL_QUERIES, result.get().longValue());
         }
         report(
-            "r2dbc parallel",
+            "r2dbc" + transportLabel() + " parallel",
             PARALLEL_CONNECTIONS * PARALLEL_QUERIES,
             parallelSeconds,
             List.of(),
@@ -141,17 +146,26 @@ public class IoTDBR2dbcBenchmarkIT {
 
   @Test
   public void blockingSessionBaseline() throws Exception {
-    Session session =
+    Session.Builder sessionBuilder =
         new Session.Builder()
             .host(System.getProperty("iotdb.it.host"))
-            .port(Integer.getInteger("iotdb.it.port", 6667))
+            .port(
+                tlsEnabled()
+                    ? Integer.getInteger("iotdb.it.tls.port", 6667)
+                    : Integer.getInteger("iotdb.it.port", 6667))
             .username(System.getProperty("iotdb.it.user"))
             .password(System.getProperty("iotdb.it.password"))
             .sqlDialect("table")
             .fetchSize(FETCH_SIZE)
             .enableRedirection(false)
-            .enableAutoFetch(false)
-            .build();
+            .enableAutoFetch(false);
+    if (tlsEnabled()) {
+      sessionBuilder
+          .useSSL(true)
+          .trustStore(System.getProperty("iotdb.it.tls.trustStore"))
+          .trustStorePwd(System.getProperty("iotdb.it.tls.trustStorePassword"));
+    }
+    Session session = sessionBuilder.build();
     session.open(false, 10_000);
     try {
       for (int i = 0; i < 20; i++) {
@@ -165,7 +179,7 @@ public class IoTDBR2dbcBenchmarkIT {
         latencies.add(System.nanoTime() - queryStart);
       }
       double seconds = (System.nanoTime() - start) / 1_000_000_000.0;
-      report("session sequential", QUERIES, seconds, latencies, 0);
+      report("session" + transportLabel() + " sequential", QUERIES, seconds, latencies, 0);
     } finally {
       session.close();
     }
@@ -259,16 +273,39 @@ public class IoTDBR2dbcBenchmarkIT {
         .block();
   }
 
-  private static ConnectionFactory factory() {
-    ConnectionFactoryOptions options =
+  private static boolean tlsEnabled() {
+    return System.getProperty("iotdb.it.tls.trustStore") != null;
+  }
+
+  private static String transportLabel() {
+    return tlsEnabled() ? " tls" : "";
+  }
+
+  private static ConnectionFactoryOptions.Builder optionsBuilder() {
+    ConnectionFactoryOptions.Builder builder =
         ConnectionFactoryOptions.builder()
             .option(ConnectionFactoryOptions.DRIVER, "iotdb")
             .option(ConnectionFactoryOptions.HOST, System.getProperty("iotdb.it.host"))
-            .option(ConnectionFactoryOptions.PORT, Integer.getInteger("iotdb.it.port", 6667))
             .option(ConnectionFactoryOptions.USER, System.getProperty("iotdb.it.user"))
             .option(ConnectionFactoryOptions.PASSWORD, System.getProperty("iotdb.it.password"))
-            .option(IoTDBConnectionFactoryOptions.SQL_DIALECT, "table")
-            .build();
-    return ConnectionFactories.get(options);
+            .option(IoTDBConnectionFactoryOptions.SQL_DIALECT, "table");
+    if (tlsEnabled()) {
+      builder
+          .option(ConnectionFactoryOptions.PORT, Integer.getInteger("iotdb.it.tls.port", 6667))
+          .option(ConnectionFactoryOptions.SSL, Boolean.TRUE)
+          .option(
+              IoTDBConnectionFactoryOptions.TRUST_STORE,
+              System.getProperty("iotdb.it.tls.trustStore"))
+          .option(
+              IoTDBConnectionFactoryOptions.TRUST_STORE_PASSWORD,
+              System.getProperty("iotdb.it.tls.trustStorePassword"));
+    } else {
+      builder.option(ConnectionFactoryOptions.PORT, Integer.getInteger("iotdb.it.port", 6667));
+    }
+    return builder;
+  }
+
+  private static ConnectionFactory factory() {
+    return ConnectionFactories.get(optionsBuilder().build());
   }
 }

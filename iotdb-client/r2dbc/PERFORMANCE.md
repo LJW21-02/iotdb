@@ -51,6 +51,21 @@ are the medians of those rounds.
 | r2dbc parallel (16 connections) | 694.3 | n/a | n/a | **+1** |
 | session sequential (1 connection) | 140.5 | 6.34 | 12.53 | 0 |
 
+### TLS arm
+
+The same workload over a TLS enabled instance (`-Diotdb.it.tls.port` plus the trust store options):
+
+| Arm | Throughput (queries/s) | p50 (ms) | p95 (ms) | Threads added |
+|-|-|-|-|-|
+| r2dbc sequential (1 connection) | 94.9 | 10.42 | 14.09 | 0 |
+| r2dbc parallel (16 connections) | 530.6 | n/a | n/a | +1 |
+| session sequential (1 connection) | 131.8 | 7.34 | 10.11 | 0 |
+
+Compared with the plaintext medians above, TLS costs roughly 14% of the single connection
+throughput and 24% of the 16 connection throughput for the driver (the session client loses about
+6%): the handshake and the per record encryption are additional work on the same selector thread,
+and the session client encrypts inside its blocking write. The thread saving is unchanged.
+
 Raw rounds:
 
 | Round | r2dbc seq qps | r2dbc seq p50/p95 | r2dbc parallel qps | session seq qps | session seq p50/p95 |
@@ -76,8 +91,8 @@ Raw rounds:
   stack (the driver decodes per row and dispatches callbacks on a bounded scheduler, the session
   client is a blocking RPC client). The design document requires a shared codec and a synchronous
   baseline before attributing a difference to the transport.
-- The **TLS arm and the RTT arms are not measured yet**. TLS correctness is verified (see
-  `IoTDBR2dbcTlsIT`), but its throughput cost has not been compared under this method.
+- The **RTT arms are not measured yet**, and the TLS arm uses the same single machine, so it does
+  not represent a network TLS deployment.
 - A single machine, a single instance and one workload shape (small row batch, no slow consumer, no
   overload) are not enough to state a general throughput or tail latency claim. The absolute values
   are also machine specific.
