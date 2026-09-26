@@ -29,6 +29,10 @@
     <artifactId>iotdb-r2dbc</artifactId>
     <name>IoTDB: Client: R2DBC</name>
     <description>A non-blocking R2DBC SPI 1.0 driver for Apache IoTDB.</description>
+    <properties>
+        <junit5.version>5.10.2</junit5.version>
+        <spring.version>6.1.13</spring.version>
+    </properties>
     <dependencies>
         <dependency>
             <groupId>io.r2dbc</groupId>
@@ -67,6 +71,11 @@
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>
         </dependency>
+        <!-- Published types implement Publisher, so the SPI module is not enough by accident. -->
+        <dependency>
+            <groupId>org.reactivestreams</groupId>
+            <artifactId>reactive-streams</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
@@ -86,6 +95,26 @@
             <groupId>org.apache.iotdb</groupId>
             <artifactId>iotdb-session</artifactId>
             <version>2.0.11-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.iotdb</groupId>
+            <artifactId>isession</artifactId>
+            <version>2.0.11-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- The TCK adapter is compiled with and without its profile, so its own imports are
+             declared instead of arriving transitively. -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>${junit5.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-jdbc</artifactId>
+            <version>${spring.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -117,9 +146,6 @@
         -->
         <profile>
             <id>with-r2dbc-tck</id>
-            <properties>
-                <junit5.version>5.10.2</junit5.version>
-            </properties>
             <dependencies>
                 <dependency>
                     <groupId>org.junit.jupiter</groupId>
@@ -155,7 +181,6 @@
             -->
             <id>with-r2dbc-spring</id>
             <properties>
-                <spring.version>6.1.13</spring.version>
                 <spring-boot.version>3.3.8</spring-boot.version>
             </properties>
             <dependencies>
