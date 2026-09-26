@@ -28,6 +28,7 @@ import io.r2dbc.spi.R2dbcDataIntegrityViolationException;
 import io.r2dbc.spi.R2dbcException;
 import io.r2dbc.spi.R2dbcPermissionDeniedException;
 import io.r2dbc.spi.R2dbcTimeoutException;
+import org.apache.thrift.transport.TTransportException;
 
 import java.util.List;
 import java.util.concurrent.TimeoutException;
@@ -116,16 +117,28 @@ public final class ExceptionMapper {
    * is unknown.
    */
   public static R2dbcException mapTransportFailure(String message, Throwable cause) {
-    if (cause instanceof TimeoutException) {
-      return new R2dbcTimeoutException(message, cause);
-    }
+    return isTimeout(cause)
+        ? new R2dbcTimeoutException(message, cause)
+        : new IoTDBR2dbcException(message, cause);
+  }
+
+  /**
+   * Whether a failure was caused by running out of time.
+   *
+   * <p>Both shapes are covered because the transport reports them differently: the JDK throws
+   * {@link TimeoutException} (the statement budget), while Thrift reports its own timeout as a
+   * transport exception with the {@code TIMED_OUT} type (the per RPC budget).
+   */
+  public static boolean isTimeout(Throwable cause) {
     Throwable current = cause;
     while (current != null) {
-      if (current instanceof TimeoutException) {
-        return new R2dbcTimeoutException(message, cause);
+      if (current instanceof TimeoutException
+          || (current instanceof TTransportException
+              && ((TTransportException) current).getType() == TTransportException.TIMED_OUT)) {
+        return true;
       }
       current = current.getCause();
     }
-    return new IoTDBR2dbcException(message, cause);
+    return false;
   }
 }

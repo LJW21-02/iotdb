@@ -73,7 +73,7 @@ URLs (`r2dbcs:`) are rejected at configuration time, see the capability matrix.
 | `iotdb.maxFrameSize` | Integer | `25165824` (24 MiB) | Stricter of this and the server announced limit wins. |
 | `connectTimeout` | Duration | `10s` | Total budget for connect + session setup. |
 | `statementTimeout` | Duration | `ZERO` | Until the first execution response; `ZERO` disables it. |
-| `iotdb.rpcTimeout` | Duration | `60s` | Per RPC budget. |
+| `iotdb.rpcTimeout` | Duration | `60s` | Per RPC budget; running out of it is reported as `R2dbcTimeoutException` and marks the connection as broken. |
 | `iotdb.serverQueryTimeout` | Duration | none | Server side budget; absent follows the server default. |
 | `iotdb.cleanupTimeout` | Duration | `10s` | Cursor/handle cleanup budget. |
 | `iotdb.maxRedirects` | Integer | `3` | How many server recommended redirections one statement may follow. |
@@ -121,6 +121,9 @@ mvn test -pl iotdb-client/r2dbc -am
 mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcIT -DfailIfNoTests=false \
     -Diotdb.it.host=127.0.0.1 -Diotdb.it.port=6667 \
     -Diotdb.it.user=<user> -Diotdb.it.password=<password>
+
+# Soak and timeout suites (the unresponsive server case needs the stalling proxy helper)
+mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcSoakIT -DfailIfNoTests=false     -Diotdb.it.host=127.0.0.1 -Diotdb.it.port=6667     -Diotdb.it.user=<user> -Diotdb.it.password=<password>     -Diotdb.it.stallProxy=<path to the validation helper>/stall_proxy.py
 
 # Frame guard against a TLS endpoint (skipped without the TLS options)
 mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcTlsIT -DfailIfNoTests=false     -Diotdb.it.host=127.0.0.1 -Diotdb.it.tls.port=6667     -Diotdb.it.user=<user> -Diotdb.it.password=<password>     -Diotdb.it.tls.trustStore=<trust.p12> -Diotdb.it.tls.trustStorePassword=<password>

@@ -23,6 +23,7 @@ import io.r2dbc.spi.Connection;
 import io.r2dbc.spi.ConnectionFactories;
 import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryOptions;
+import io.r2dbc.spi.R2dbcTimeoutException;
 import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Row;
 import io.r2dbc.spi.Statement;
@@ -34,6 +35,12 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.io.IOException;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -42,6 +49,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -193,6 +201,91 @@ public class IoTDBR2dbcSoakIT {
         selectorThreadCount());
   }
 
+  /**
+   * A server that stops answering without closing its socket is the case the RPC timeout exists
+   * for. The driver must fail the statement with a timeout instead of waiting forever, and
+   * afterwards the connection must be reported as broken rather than being reused silently.
+   */
+  @Test
+  public void unresponsiveServerFailsWithinTheRpcTimeout() throws Exception {
+    Path stallFile = Files.createTempFile("r2dbc-stall", ".flag");
+    Files.delete(stallFile);
+    int proxyPort = freePort();
+    Process proxy =
+        new ProcessBuilder(
+                "python",
+                Path.of(System.getProperty("iotdb.it.stallProxy")).toString(),
+                "--listen-port",
+                String.valueOf(proxyPort),
+                "--target-port",
+                String.valueOf(Integer.getInteger("iotdb.it.port", 6667)),
+                "--stall-file",
+                stallFile.toString())
+            .redirectErrorStream(true)
+            .start();
+    ConnectionFactory factory = factory(proxyPort, Duration.ofSeconds(3));
+    try {
+      awaitPort(proxyPort);
+      Connection connection = Mono.from(factory.create()).block();
+      try {
+        provision(connection);
+        assertEquals(ROWS, query(connection.createStatement(selectAllText())).size());
+
+        // The socket stays open but nothing is answered from here on.
+        Files.createFile(stallFile);
+        long start = System.nanoTime();
+        Throwable failure =
+            assertThrows(
+                Throwable.class,
+                () ->
+                    Mono.from(connection.createStatement(selectAllText()).execute())
+                        .timeout(Duration.ofSeconds(30))
+                        .block());
+        long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
+        assertTrue(
+            "the driver must fail on its own timeout, took " + elapsedMillis + " ms",
+            elapsedMillis < 20_000);
+        assertTrue(
+            "a timeout must be reported as R2dbcTimeoutException, was " + failure,
+            failure instanceof R2dbcTimeoutException);
+        assertTrue(!Mono.from(connection.validate(ValidationDepth.LOCAL)).block());
+
+        // A broken connection must not be reused for the next statement either.
+        assertThrows(
+            Throwable.class,
+            () ->
+                Mono.from(connection.createStatement(selectAllText()).execute())
+                    .timeout(Duration.ofSeconds(30))
+                    .block());
+      } finally {
+        Mono.from(connection.close()).block();
+      }
+    } finally {
+      ((IoTDBR2dbcConnectionFactory) factory).close();
+      proxy.destroyForcibly();
+      proxy.waitFor();
+      Files.deleteIfExists(stallFile);
+    }
+  }
+
+  private static int freePort() throws Exception {
+    try (ServerSocket socket = new ServerSocket(0)) {
+      return socket.getLocalPort();
+    }
+  }
+
+  private static void awaitPort(int port) throws Exception {
+    long deadline = System.currentTimeMillis() + 10_000;
+    while (System.currentTimeMillis() < deadline) {
+      try (Socket socket = new Socket("127.0.0.1", port)) {
+        return;
+      } catch (IOException e) {
+        Thread.sleep(50);
+      }
+    }
+    throw new AssertionError("proxy did not start on port " + port);
+  }
+
   private static long selectorThreadCount() {
     return Thread.getAllStackTraces().keySet().stream()
         .filter(thread -> thread.getName().startsWith("TAsyncClientManager#SelectorThread"))
@@ -251,15 +344,25 @@ public class IoTDBR2dbcSoakIT {
   }
 
   private static ConnectionFactory factory() {
-    ConnectionFactoryOptions options =
-        ConnectionFactoryOptions.builder()
-            .option(ConnectionFactoryOptions.DRIVER, "iotdb")
-            .option(ConnectionFactoryOptions.HOST, System.getProperty("iotdb.it.host"))
-            .option(ConnectionFactoryOptions.PORT, Integer.getInteger("iotdb.it.port", 6667))
-            .option(ConnectionFactoryOptions.USER, System.getProperty("iotdb.it.user"))
-            .option(ConnectionFactoryOptions.PASSWORD, System.getProperty("iotdb.it.password"))
-            .option(IoTDBConnectionFactoryOptions.SQL_DIALECT, "table")
-            .build();
-    return ConnectionFactories.get(options);
+    return ConnectionFactories.get(options().build());
+  }
+
+  /** A factory on another port, with a per RPC budget short enough for a test. */
+  private static ConnectionFactory factory(int port, Duration rpcTimeout) {
+    return ConnectionFactories.get(
+        options()
+            .option(ConnectionFactoryOptions.PORT, port)
+            .option(IoTDBConnectionFactoryOptions.RPC_TIMEOUT, rpcTimeout)
+            .build());
+  }
+
+  private static ConnectionFactoryOptions.Builder options() {
+    return ConnectionFactoryOptions.builder()
+        .option(ConnectionFactoryOptions.DRIVER, "iotdb")
+        .option(ConnectionFactoryOptions.HOST, System.getProperty("iotdb.it.host"))
+        .option(ConnectionFactoryOptions.PORT, Integer.getInteger("iotdb.it.port", 6667))
+        .option(ConnectionFactoryOptions.USER, System.getProperty("iotdb.it.user"))
+        .option(ConnectionFactoryOptions.PASSWORD, System.getProperty("iotdb.it.password"))
+        .option(IoTDBConnectionFactoryOptions.SQL_DIALECT, "table");
   }
 }

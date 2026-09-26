@@ -54,7 +54,6 @@ import io.r2dbc.spi.Statement;
 import io.r2dbc.spi.TransactionDefinition;
 import io.r2dbc.spi.ValidationDepth;
 import org.apache.thrift.async.TAsyncClientManager;
-import org.apache.thrift.transport.TTransportException;
 import org.reactivestreams.Publisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -301,7 +300,7 @@ public final class IoTDBConnection implements Connection, Lifecycle {
                 // The protocol state is unknown after a transport failure.
                 abort();
                 String message =
-                    isTimeout(error)
+                    ExceptionMapper.isTimeout(error)
                         ? String.format(
                             R2dbcMessages.EXCEPTION_THE_RPC_TIMED_OUT_AFTER_ARG_6B50D3BF,
                             configuration.rpcTimeout())
@@ -728,21 +727,6 @@ public final class IoTDBConnection implements Connection, Lifecycle {
     }
     long millis = timeout.toMillis();
     return timeout.getNano() % 1_000_000 == 0 ? millis : millis + 1;
-  }
-
-  private static boolean isTimeout(Throwable error) {
-    Throwable current = error;
-    while (current != null) {
-      if (current instanceof TimeoutException) {
-        return true;
-      }
-      if (current instanceof TTransportException
-          && ((TTransportException) current).getType() == TTransportException.TIMED_OUT) {
-        return true;
-      }
-      current = current.getCause();
-    }
-    return false;
   }
 
   private static IoTDBR2dbcException stillHasActiveResult() {
