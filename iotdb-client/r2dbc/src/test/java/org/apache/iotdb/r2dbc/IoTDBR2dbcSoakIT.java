@@ -43,6 +43,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -284,6 +285,99 @@ public class IoTDBR2dbcSoakIT {
       }
     }
     throw new AssertionError("proxy did not start on port " + port);
+  }
+
+  /**
+   * Sustained mixed workload, gated by {@code -Diotdb.it.soak.seconds=N}: paged queries, prepared
+   * statements, discarded results and connection churn for as long as the budget allows. Every
+   * iteration asserts what it read, and the run reports rows, statements, heap and thread deltas
+   * with a {@code SOAK} prefix so a long run leaves evidence behind.
+   *
+   * <p>Skipped by default: the short rounds above are the suite, and a build should not depend on
+   * one machine being free for minutes.
+   */
+  @Test
+  public void sustainedMixedWorkloadKeepsResourcesBounded() throws Exception {
+    int seconds = Integer.getInteger("iotdb.it.soak.seconds", 0);
+    Assume.assumeTrue("set -Diotdb.it.soak.seconds=N to run it", seconds > 0);
+    ConnectionFactory factory = factory();
+    Connection connection = Mono.from(factory.create()).block();
+    try {
+      provision(connection);
+      long baselineHeap = usedHeapAfterCollection();
+      long selectorsBefore = selectorThreadCount();
+      long driverThreadsBefore = driverThreadCount();
+      long deadline = System.nanoTime() + Duration.ofSeconds(seconds).toNanos();
+      long statements = 0;
+      long rows = 0;
+      long nextReport = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+      while (System.nanoTime() < deadline) {
+        rows += query(connection.createStatement(selectAllText()).fetchSize(5)).size();
+        Statement bound = connection.createStatement(selectValueText());
+        bound.bind(0, (int) (statements % ROWS) + 1);
+        List<Row> boundRows = query(bound);
+        assertEquals("bound statement " + statements, 1, boundRows.size());
+        rows += boundRows.size();
+        // A result that is thrown away still has to release its cursor.
+        assertTrue(discardedResultIsEmpty(connection));
+        statements += 3;
+        if (System.nanoTime() > nextReport) {
+          report(seconds, statements, rows, baselineHeap, driverThreadsBefore);
+          nextReport = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        }
+      }
+      report(seconds, statements, rows, baselineHeap, driverThreadsBefore);
+      assertTrue(
+          "the connection must stay usable",
+          Mono.from(connection.validate(ValidationDepth.LOCAL)).block());
+      assertEquals(
+          "the sustained run must not add a selector thread",
+          selectorsBefore,
+          selectorThreadCount());
+      // Callback workers expire after a minute of inactivity, so a couple of extra ones are normal;
+      // the runtime caps them, so unbounded growth would be the defect.
+      assertTrue(
+          "the sustained run must not accumulate driver threads",
+          driverThreadCount() - driverThreadsBefore <= 4);
+      assertTrue(
+          "the sustained run must not accumulate heap",
+          usedHeapAfterCollection() - baselineHeap < 64L * 1024 * 1024);
+    } finally {
+      Mono.from(connection.close()).block();
+      ((IoTDBR2dbcConnectionFactory) factory).close();
+    }
+  }
+
+  private static void report(
+      int seconds, long statements, long rows, long baselineHeap, long baselineThreads) {
+    System.out.printf(
+        Locale.ROOT,
+        "SOAK seconds=%d statements=%d rows=%d heapDeltaMiB=%.1f selectorThreads=%d driverThreads=%d"
+            + " driverThreadDelta=%d%n",
+        seconds,
+        statements,
+        rows,
+        (usedHeapAfterCollection() - baselineHeap) / (1024.0 * 1024.0),
+        selectorThreadCount(),
+        driverThreadCount(),
+        driverThreadCount() - baselineThreads);
+  }
+
+  /** Selector and callback threads of the driver factories this test created. */
+  private static long driverThreadCount() {
+    return Thread.getAllStackTraces().keySet().stream()
+        .filter(
+            thread ->
+                thread.getName().startsWith("TAsyncClientManager#SelectorThread")
+                    || thread.getName().startsWith("iotdb-r2dbc-callbacks"))
+        .count();
+  }
+
+  /** Heap in use after a collection, so the number is comparable between samples. */
+  private static long usedHeapAfterCollection() {
+    System.gc();
+    Runtime runtime = Runtime.getRuntime();
+    return runtime.totalMemory() - runtime.freeMemory();
   }
 
   private static long selectorThreadCount() {
