@@ -197,6 +197,13 @@ The run used the same shared laptop and the same single instance as the tables a
 stability measurement, not a throughput claim: the fixture is 300 rows, so the numbers show that the
 driver keeps working and stays flat, not what it can move at peak.
 
+### Reproducing the ordering
+
+A later single round on the quiet machine measured 328.4 queries/s (r2dbc), 510.1 (session) and 634.1
+(blocking + driver codec) for the same workload: every arm was about three times faster than in
+session B and the order did not change. Absolute numbers from this laptop therefore say little, while
+the ordering and the per session comparisons reproduce.
+
 ## What the numbers support
 
 - **The thread saving is real and measurable.** Sixteen connections that each held an active result
