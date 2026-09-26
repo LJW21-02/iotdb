@@ -98,8 +98,9 @@ update count differences, and 6 further tests are excluded with reasons.
 - The transport is reusable for plaintext and TLS with the same async client, request serialization
   and cleanup path.
 - Redirection replaces the session of a connection (new socket, `openSession`, statement id) and is
-  bounded per statement; a prepared statement is not redirected yet, because its server side handle
-  lives on the original node, and reports the recommendation as an error instead.
+  bounded per statement. A prepared execution is prepared again on the target node, because the
+  server side handle belongs to the session that created it; the handle of an attempt that never
+  reached the caller is released, so a followed redirection leaves no registered statement behind.
 - `TlsNonblockingSocket` is a hand written state machine (handshake, record layer, partial write
   accounting, and one extra transition so Thrift can read a frame body from buffered plaintext). This
   is the main maintenance cost of the decision and the main argument for Netty if it grows.

@@ -261,24 +261,26 @@ public final class IoTDBConnection implements Connection, Lifecycle {
         () -> {
           int effectiveFetchSize = effectiveFetchSize(fetchSize);
           List<ParameterBinding> wireParameters = toWireParameters(parameters);
-          Mono<TSExecuteStatementResp> execution;
-          String preparedStatementName = null;
+          Mono<Execution> execution;
           if (wireParameters.isEmpty()) {
-            execution = executeStatement(sql, effectiveFetchSize);
+            execution =
+                executeStatement(sql, effectiveFetchSize)
+                    .map(response -> new Execution(response, null));
           } else if (canUsePreparedStatement(sql, wireParameters)) {
-            preparedStatementName = preparedName();
             execution =
                 executePreparedStatement(
-                    sql, wireParameters, effectiveFetchSize, preparedStatementName);
+                    sql, wireParameters, effectiveFetchSize, configuration.maxRedirects());
           } else {
             // The tree dialect has no server side prepare; literals are the only verified path.
             execution =
-                executeStatement(LiteralBinder.bind(sql, wireParameters), effectiveFetchSize);
+                executeStatement(LiteralBinder.bind(sql, wireParameters), effectiveFetchSize)
+                    .map(response -> new Execution(response, null));
           }
-          String preparedName = preparedStatementName;
           Duration timeout = statementTimeout;
           Mono<IoTDBResult> result =
-              execution.map(response -> buildResult(sql, response, fetchSize, preparedName));
+              execution.map(
+                  completed ->
+                      buildResult(sql, completed.response(), fetchSize, completed.statementName()));
           if (!timeout.isZero()) {
             result = result.timeout(timeout);
           }
@@ -447,8 +449,41 @@ public final class IoTDBConnection implements Connection, Lifecycle {
         });
   }
 
-  private Mono<TSExecuteStatementResp> executePreparedStatement(
-      String sql, List<ParameterBinding> parameters, int fetchSize, String statementName) {
+  /**
+   * Prepares and executes one bound statement.
+   *
+   * <p>A redirect is followed by preparing again on the new node, because the server side handle
+   * lives on the session that created it; the returned statement name is the handle of the last
+   * attempt, which is the one the cursor releases.
+   */
+  private Mono<Execution> executePreparedStatement(
+      String sql, List<ParameterBinding> parameters, int fetchSize, int budget) {
+    return Mono.defer(
+        () -> {
+          String statementName = preparedName();
+          Mono<TSExecuteStatementResp> attempt =
+              prepareStatement(sql, parameters, statementName)
+                  .then(
+                      call(
+                          client ->
+                              client.executePreparedStatement(
+                                  buildExecutePreparedRequest(
+                                      statementName, parameters, fetchSize))));
+          return attempt
+              .doOnNext(response -> verifyExecutionStatus(response.getStatus(), sql))
+              // A statement that failed before it reached the caller keeps no handle behind.
+              .onErrorResume(
+                  error -> discardPreparedStatement(statementName).then(Mono.error(error)))
+              .flatMap(
+                  response ->
+                      completeExecution(
+                          response, statementName, sql, parameters, fetchSize, budget));
+        });
+  }
+
+  /** Prepares a statement and checks that the server declared the expected placeholders. */
+  private Mono<Void> prepareStatement(
+      String sql, List<ParameterBinding> parameters, String statementName) {
     return call(client -> client.prepareStatement(new TSPrepareReq(sessionId, sql, statementName)))
         .doOnNext(
             response -> {
@@ -464,29 +499,69 @@ public final class IoTDBConnection implements Connection, Lifecycle {
                         parameters.size()));
               }
             })
-        .flatMap(
-            ignored -> {
-              TSExecutePreparedReq request =
-                  new TSExecutePreparedReq()
-                      .setSessionId(sessionId)
-                      .setStatementName(statementName)
-                      .setParameters(
-                          PreparedParameterSerde.serialize(
-                              encodedValues(parameters), jdbcTypes(parameters), parameters.size()))
-                      .setStatementId(statementId)
-                      .setFetchSize(fetchSize);
-              long serverTimeout = serverQueryTimeoutMillis();
-              if (serverTimeout > 0) {
-                request.setTimeout(serverTimeout);
-              }
-              return call(client -> client.executePreparedStatement(request));
-            })
-        .doOnNext(response -> ExceptionMapper.verifySuccess(response.getStatus(), sql))
-        .onErrorResume(
-            error ->
-                releasePreparedStatement(statementName)
-                    .onErrorResume(ignored -> Mono.empty())
-                    .then(Mono.error(error)));
+        .then();
+  }
+
+  /**
+   * Verifies an execution response that is not a redirection recommendation.
+   *
+   * <p>A partially redirected response, in which the server named several different nodes, is
+   * rejected because re-sending the whole request to one of them could apply part of it twice.
+   */
+  private static void verifyExecutionStatus(TSStatus status, String sql) {
+    if (status != null && status.isSetSubStatus() && !status.isSetRedirectNode()) {
+      throw new IoTDBR2dbcException(
+          R2dbcMessages
+              .EXCEPTION_A_PARTIALLY_REDIRECTED_MULTI_DEVICE_RESPONSE_CANNOT_BE_REPLAYED_SAFELY_162D6946);
+    }
+    if (redirectTarget(status) == null) {
+      ExceptionMapper.verifySuccess(status, sql);
+    }
+  }
+
+  private Mono<Execution> completeExecution(
+      TSExecuteStatementResp response,
+      String statementName,
+      String sql,
+      List<ParameterBinding> parameters,
+      int fetchSize,
+      int budget) {
+    TEndPoint target = redirectTarget(response.getStatus());
+    if (target == null) {
+      return Mono.just(new Execution(response, statementName));
+    }
+    if (budget <= 0) {
+      return discardPreparedStatement(statementName)
+          .then(
+              Mono.error(
+                  new IoTDBR2dbcException(
+                      String.format(
+                          R2dbcMessages
+                              .EXCEPTION_THE_REDIRECTION_BUDGET_OF_ARG_HOPS_IS_EXHAUSTED_344A9A03,
+                          configuration.maxRedirects()))));
+    }
+    // The handle belongs to the session that created it, so the statement is prepared again on
+    // the recommended node.
+    return switchSession(target)
+        .then(Mono.defer(() -> executePreparedStatement(sql, parameters, fetchSize, budget - 1)));
+  }
+
+  private TSExecutePreparedReq buildExecutePreparedRequest(
+      String statementName, List<ParameterBinding> parameters, int fetchSize) {
+    TSExecutePreparedReq request =
+        new TSExecutePreparedReq()
+            .setSessionId(sessionId)
+            .setStatementName(statementName)
+            .setParameters(
+                PreparedParameterSerde.serialize(
+                    encodedValues(parameters), jdbcTypes(parameters), parameters.size()))
+            .setStatementId(statementId)
+            .setFetchSize(fetchSize);
+    long serverTimeout = serverQueryTimeoutMillis();
+    if (serverTimeout > 0) {
+      request.setTimeout(serverTimeout);
+    }
+    return request;
   }
 
   private Mono<Void> releasePreparedStatement(String statementName) {
@@ -496,9 +571,14 @@ public final class IoTDBConnection implements Connection, Lifecycle {
         .then();
   }
 
+  /** Frees a handle whose statement already failed; a further failure has nothing to report. */
+  private Mono<Void> discardPreparedStatement(String statementName) {
+    return releasePreparedStatement(statementName).onErrorResume(ignored -> Mono.empty());
+  }
+
   private IoTDBResult buildResult(
       String sql, TSExecuteStatementResp response, int fetchSize, String preparedStatementName) {
-    if (!IoTDBQueryCursor.hasResultSet(response)) {
+    if (!RowDecoder.hasResultSet(response)) {
       statementActive.set(false);
       return IoTDBResult.empty();
     }
@@ -876,6 +956,9 @@ public final class IoTDBConnection implements Connection, Lifecycle {
       throw new IllegalStateException(R2dbcMessages.EXCEPTION_THE_CONNECTION_IS_CLOSED_AB73B8A7);
     }
   }
+
+  /** The response of one successful execution and the prepared handle it has to release. */
+  private record Execution(TSExecuteStatementResp response, String statementName) {}
 
   /** Values collected during the session handshake. */
   private static final class Handshake {

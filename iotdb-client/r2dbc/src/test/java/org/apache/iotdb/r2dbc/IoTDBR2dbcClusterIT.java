@@ -117,6 +117,45 @@ public class IoTDBR2dbcClusterIT {
     }
   }
 
+  /**
+   * A typed parameter query uses the prepare RPC, so the server side handle is created on the
+   * session that serves it; the same statement must still return the rows when the request lands on
+   * a DataNode that does not host the fixture.
+   */
+  @Test
+  public void typedParameterQueryRunsFromAnyDataNode() {
+    List<Integer> ports = clusterPorts();
+    List<ConnectionFactory> factories = new ArrayList<>();
+    try {
+      provision();
+      for (int port : ports) {
+        ConnectionFactory factory = factory(port);
+        factories.add(factory);
+        Connection connection = Mono.from(factory.create()).block();
+        try {
+          List<Row> rows =
+              Flux.from(
+                      connection
+                          .createStatement(
+                              "SELECT v FROM " + DATABASE + ".samples WHERE device = ?")
+                          .bind(0, "d1")
+                          .execute())
+                  .flatMap(result -> result.map((row, metadata) -> row))
+                  .collectList()
+                  .block();
+          assertEquals("reader on port " + port, ROWS, rows.size());
+          assertEquals(Integer.valueOf(1), rows.get(0).get("v", Integer.class));
+        } finally {
+          Mono.from(connection.close()).block();
+        }
+      }
+    } finally {
+      for (ConnectionFactory factory : factories) {
+        ((IoTDBR2dbcConnectionFactory) factory).close();
+      }
+    }
+  }
+
   @Test
   public void brokenConnectionFailsFastAndIsNotReused() throws Exception {
     int dataNodePort = clusterPorts().get(0);

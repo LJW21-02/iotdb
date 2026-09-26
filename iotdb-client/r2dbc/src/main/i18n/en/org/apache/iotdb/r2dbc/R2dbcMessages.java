@@ -63,7 +63,7 @@ public final class R2dbcMessages {
   public static final String EXCEPTION_PARAMETER_INDEX_ARG_EXCEEDS_THE_ARG_PLACEHOLDERS_OF_THE_STATEMENT_F5525F22 = "Parameter index %d exceeds the %d placeholders of the statement";
   public static final String EXCEPTION_PARAMETER_INDEX_MUST_NOT_BE_NEGATIVE_BUT_WAS_ARG_59A7879B = "Parameter index must not be negative, but was %d";
   public static final String EXCEPTION_PORT_MUST_BE_BETWEEN_1_AND_65535_BUT_WAS_ARG_348A6B97 = "Port must be between 1 and 65535, but was %d";
-  public static final String EXCEPTION_QUERY_REDIRECTION_IS_NOT_SUPPORTED_BY_THIS_DRIVER_VERSION_AEDD09FA = "Query redirection is not supported by this driver version";
+  public static final String EXCEPTION_THE_SERVER_RECOMMENDED_A_REDIRECTION_WITHOUT_NAMING_A_TARGET_NODE_0F043C12 = "The server recommended a redirection without naming a target node";
   public static final String EXCEPTION_READING_THE_NEXT_PAGE_FAILED_ARG_74678706 = "Reading the next page failed: %s";
   public static final String EXCEPTION_RECEIVED_AN_INVALID_FRAME_SIZE_ARG_280DE971 = "Received an invalid frame size %d";
   public static final String EXCEPTION_RECEIVED_A_FRAME_OF_ARG_BYTES_WHICH_EXCEEDS_THE_CONFIGURED_LIMIT_OF_ARG_BYTES_FEBB2338 = "Received a frame of %d bytes which exceeds the configured limit of %d bytes";

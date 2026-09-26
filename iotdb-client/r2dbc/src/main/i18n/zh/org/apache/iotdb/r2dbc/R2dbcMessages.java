@@ -63,7 +63,7 @@ public final class R2dbcMessages {
   public static final String EXCEPTION_PARAMETER_INDEX_ARG_EXCEEDS_THE_ARG_PLACEHOLDERS_OF_THE_STATEMENT_F5525F22 = "参数下标 %d 超出语句的 %d 个占位符";
   public static final String EXCEPTION_PARAMETER_INDEX_MUST_NOT_BE_NEGATIVE_BUT_WAS_ARG_59A7879B = "参数下标不能为负数，实际为 %d";
   public static final String EXCEPTION_PORT_MUST_BE_BETWEEN_1_AND_65535_BUT_WAS_ARG_348A6B97 = "端口必须在 1 到 65535 之间，实际为 %d";
-  public static final String EXCEPTION_QUERY_REDIRECTION_IS_NOT_SUPPORTED_BY_THIS_DRIVER_VERSION_AEDD09FA = "当前驱动版本不支持查询重定向";
+  public static final String EXCEPTION_THE_SERVER_RECOMMENDED_A_REDIRECTION_WITHOUT_NAMING_A_TARGET_NODE_0F043C12 = "服务端建议重定向，但没有指定目标节点";
   public static final String EXCEPTION_READING_THE_NEXT_PAGE_FAILED_ARG_74678706 = "读取下一页失败：%s";
   public static final String EXCEPTION_RECEIVED_AN_INVALID_FRAME_SIZE_ARG_280DE971 = "收到非法的帧长度 %d";
   public static final String EXCEPTION_RECEIVED_A_FRAME_OF_ARG_BYTES_WHICH_EXCEEDS_THE_CONFIGURED_LIMIT_OF_ARG_BYTES_FEBB2338 = "收到的帧为 %d 字节，超过配置上限 %d 字节";

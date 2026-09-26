@@ -56,9 +56,11 @@ public final class ExceptionMapper {
       return;
     }
     if (code == TSStatusCode.REDIRECTION_RECOMMEND.getStatusCode()) {
+      // Both execution paths follow a redirection before they verify, so a recommendation that
+      // arrives here named no node to follow.
       throw new IoTDBR2dbcException(
           R2dbcMessages
-              .EXCEPTION_QUERY_REDIRECTION_IS_NOT_SUPPORTED_BY_THIS_DRIVER_VERSION_AEDD09FA);
+              .EXCEPTION_THE_SERVER_RECOMMENDED_A_REDIRECTION_WITHOUT_NAMING_A_TARGET_NODE_0F043C12);
     }
     throw mapStatus(status, sql);
   }
