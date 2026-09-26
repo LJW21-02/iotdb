@@ -176,6 +176,27 @@ Raw rounds, session B (TLS):
 | 3 | 99.8 | 9.38 / 12.82 | 661.1 | 139.9 | 7.15 / 8.73 | 148.6 | 6.41 / 8.62 |
 | 4 | 153.1 | 6.31 / 8.61 | 694.0 | 175.4 | 5.57 / 7.27 | 214.4 | 4.52 / 6.19 |
 
+### Long run (ten minutes, one instance)
+
+`IoTDBR2dbcSoakIT#sustainedMixedWorkloadKeepsResourcesBounded` is skipped by default; giving it a
+budget (`-Diotdb.it.soak.seconds=600`) runs a mixed workload of a paged query, a prepared statement
+with a bound parameter and a discarded result per iteration, and asserts what each iteration read.
+The recorded run:
+
+| Measure | Value |
+|-|-|
+| Duration | 600.4 s |
+| Statements | 358,761 (about 598/s) |
+| Rows read and checked | 35,995,687 (about 60,000/s) |
+| Heap in use after a collection | 0.7 MiB *below* the start of the run |
+| Selector threads | 1, unchanged (one factory) |
+| Driver threads | 2, one extra callback worker (workers expire after a minute of inactivity) |
+| Flight recording (18.7 MiB, `profile`) | 2 `jdk.SocketRead` events, both the async client's own non-blocking size and body read, 0 `jdk.JavaMonitorEnter` events |
+
+The run used the same shared laptop and the same single instance as the tables above, and it is a
+stability measurement, not a throughput claim: the fixture is 300 rows, so the numbers show that the
+driver keeps working and stays flat, not what it can move at peak.
+
 ## What the numbers support
 
 - **The thread saving is real and measurable.** Sixteen connections that each held an active result
@@ -189,6 +210,8 @@ Raw rounds, session B (TLS):
 - **The difference to the blocking arms is transport and dispatch, not decoding**, because the arm
   that shares the driver's `RowDecoder` over a blocking socket is the fastest of the three. The RTT
   arm locates the same difference in the request write path rather than in the round trip count.
+- **The resource bounds hold over a long run**: ten minutes of mixed work left the heap and the
+  thread counts where they started, with one selector thread per factory.
 
 ## What the numbers do not support
 
