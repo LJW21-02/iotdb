@@ -211,5 +211,8 @@ Open items, tracked by the milestones of the design document above:
 - A write coalescing layer for the non-blocking transport. Thrift's async client writes the frame
   size and payload as two socket writes, which costs one extra transport delay per request on a high
   latency path (`PERFORMANCE.md`, "RTT arm"); on a LAN it is not visible.
-- Repository level packaging checks: the module is part of the root reactor, its dependencies are
-  listed in `dependencies.json`, and the module builds with the RAT and spotless checks enabled.
+- Repository level packaging checks. Verified here: the module builds to
+  `iotdb-r2dbc-<version>.jar` with `META-INF/services/io.r2dbc.spi.ConnectionFactoryProvider`
+  pointing at `IoTDBR2dbcConnectionFactoryProvider`, its dependencies are listed in
+  `dependencies.json`, and it builds with the RAT and spotless checks enabled. The aggregate
+  CycloneDX report (`-P enable-sbom-check`) is a whole reactor run and was not part of this work.
