@@ -52,6 +52,10 @@ ANSI SQL is translated to the IoTDB table model:
 
 Everything else, including statement splitting for compound statements, is handled by the driver.
 
+The adapter prepares its fixture through the IoTDB JDBC driver, which only the `with-r2dbc-tck`
+profile puts on the test classpath. Without that profile it skips itself with a message instead of
+failing, so a plain `mvn test -Diotdb.it.host=...` run of the integration suites stays green.
+
 ## Result of the last run (2026-09-23)
 
 28 inherited test methods ran: **17 passed, 11 failed, 0 errored**. Six further tests are excluded

@@ -24,6 +24,8 @@ import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryOptions;
 import io.r2dbc.spi.test.TestKit;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.jdbc.core.JdbcOperations;
@@ -55,17 +57,54 @@ import java.util.Properties;
 class IoTDBR2dbcTckTest implements TestKit<Integer> {
 
   private static final String DATABASE = "r2dbc_tck";
-  private static final ConnectionFactory CONNECTION_FACTORY = createConnectionFactory();
-  private static final JdbcOperations JDBC_OPERATIONS = createJdbcOperations();
+
+  /**
+   * The fixture is created lazily: the TCK database is prepared through the IoTDB JDBC driver,
+   * which only the {@code with-r2dbc-tck} profile puts on the test classpath, so the class must be
+   * able to skip itself before the fixture is touched.
+   */
+  private static final class Fixture {
+
+    private static final ConnectionFactory CONNECTION_FACTORY = createConnectionFactory();
+    private static final JdbcOperations JDBC_OPERATIONS = createJdbcOperations();
+
+    private static void prepare() {
+      // Reaching this method initializes the holder, so the caller decides when that happens.
+    }
+  }
+
+  private static boolean fixturesReady;
+
+  @BeforeAll
+  static void requireTckFixture() {
+    Assumptions.assumeTrue(
+        jdbcDriverIsAvailable(),
+        "requires -P with-r2dbc-tck, which puts org.apache.iotdb.jdbc.IoTDBDriver on the classpath");
+    Fixture.prepare();
+    fixturesReady = true;
+  }
+
+  private static boolean jdbcDriverIsAvailable() {
+    try {
+      Class.forName("org.apache.iotdb.jdbc.IoTDBDriver");
+      return true;
+    } catch (ClassNotFoundException e) {
+      return false;
+    }
+  }
 
   @AfterAll
   static void closeFactory() {
-    ((IoTDBR2dbcConnectionFactory) CONNECTION_FACTORY).close();
+    // JUnit runs the after-all method even when the assumption above skipped the container, and the
+    // fixture must not be created just to close it.
+    if (fixturesReady) {
+      ((IoTDBR2dbcConnectionFactory) Fixture.CONNECTION_FACTORY).close();
+    }
   }
 
   @Override
   public ConnectionFactory getConnectionFactory() {
-    return CONNECTION_FACTORY;
+    return Fixture.CONNECTION_FACTORY;
   }
 
   @Override
@@ -80,7 +119,7 @@ class IoTDBR2dbcTckTest implements TestKit<Integer> {
 
   @Override
   public JdbcOperations getJdbcOperations() {
-    return JDBC_OPERATIONS;
+    return Fixture.JDBC_OPERATIONS;
   }
 
   @Override
