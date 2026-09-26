@@ -20,15 +20,12 @@
 package org.apache.iotdb.r2dbc.client;
 
 import org.apache.iotdb.r2dbc.R2dbcMessages;
-import org.apache.iotdb.r2dbc.codec.IoTDBTypeMapper;
 import org.apache.iotdb.r2dbc.exception.ExceptionMapper;
 import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
 import org.apache.iotdb.service.rpc.thrift.TSExecuteStatementResp;
 
 import io.r2dbc.spi.Row;
-import org.apache.tsfile.enums.TSDataType;
 import org.apache.tsfile.read.common.block.TsBlock;
-import org.apache.tsfile.read.common.block.column.TsBlockSerde;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscriber;
 import org.slf4j.Logger;
@@ -40,13 +37,11 @@ import reactor.core.scheduler.Scheduler;
 import java.nio.ByteBuffer;
 import java.time.ZoneId;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Deque;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Single consumption cursor that decodes one page of TsBlocks at a time.
+ * Single consumption cursor over the pages of one query, one page of TsBlocks at a time.
  *
  * <p>A new page is requested only when the currently buffered rows are exhausted and the subscriber
  * still has outstanding demand, so the driver never prefetches while a consumer is slow. The number
@@ -56,17 +51,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(IoTDBQueryCursor.class);
-  private static final TsBlockSerde SERDE = new TsBlockSerde();
-  private static final String TIME_COLUMN_NAME = "Time";
 
   private final IoTDBConnection connection;
   private final String sql;
   private final long queryId;
   private final int fetchSize;
   private final String preparedStatementName;
-  private final IoTDBRowMetadata metadata;
-  private final TSDataType[] columnTypes;
-  private final int[] tsBlockIndexes;
+  private final RowDecoder decoder;
   private final ZoneId zoneId;
   private final int timeFactor;
   private final Scheduler scheduler;
@@ -102,10 +93,7 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
     this.scheduler = scheduler;
     this.timeFactor = timeFactor;
     this.zoneId = zoneId;
-    Columns columns = Columns.from(response);
-    this.columnTypes = columns.types.toArray(new TSDataType[0]);
-    this.tsBlockIndexes = columns.tsBlockIndexes;
-    this.metadata = IoTDBRowMetadata.of(columns.names, columns.types);
+    this.decoder = RowDecoder.of(response, zoneId, timeFactor);
     if (response.getQueryResult() != null) {
       pages.addAll(response.getQueryResult());
     }
@@ -123,11 +111,6 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
       ZoneId zoneId) {
     return new IoTDBQueryCursor(
         connection, sql, response, fetchSize, preparedStatementName, scheduler, timeFactor, zoneId);
-  }
-
-  /** Whether the response carries a result set that must be paged and closed. */
-  public static boolean hasResultSet(TSExecuteStatementResp response) {
-    return response.getColumns() != null && !response.getColumns().isEmpty();
   }
 
   @Override
@@ -227,22 +210,14 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
   private Row nextRow() {
     while (true) {
       if (block != null && rowIndex < block.getPositionCount()) {
-        return new IoTDBRow(
-            block, rowIndex++, metadata, zoneId, timeFactor, columnTypes, tsBlockIndexes);
+        return decoder.row(block, rowIndex++);
       }
       block = null;
       ByteBuffer page = pages.poll();
       if (page == null) {
         return null;
       }
-      try {
-        block = SERDE.deserialize(page.duplicate());
-      } catch (RuntimeException e) {
-        throw new IoTDBR2dbcException(
-            String.format(
-                R2dbcMessages.EXCEPTION_FAILED_TO_DECODE_A_TSBLOCK_ARG_050F52E4, e.getMessage()),
-            e);
-      }
+      block = decoder.decode(page);
       rowIndex = 0;
     }
   }
@@ -319,57 +294,5 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
             ignored -> {},
             error ->
                 LOGGER.warn(R2dbcMessages.LOG_CLEANING_UP_THE_QUERY_HANDLE_FAILED_DE915B4D, error));
-  }
-
-  private static final class Columns {
-
-    private final List<String> names;
-    private final List<TSDataType> types;
-    private final int[] tsBlockIndexes;
-
-    private Columns(List<String> names, List<TSDataType> types, int[] tsBlockIndexes) {
-      this.names = names;
-      this.types = types;
-      this.tsBlockIndexes = tsBlockIndexes;
-    }
-
-    private static Columns from(TSExecuteStatementResp response) {
-      List<String> serverColumns =
-          response.getColumns() == null ? List.of() : response.getColumns();
-      List<String> serverTypes =
-          response.getDataTypeList() == null ? List.of() : response.getDataTypeList();
-      if (serverTypes.size() != serverColumns.size()) {
-        throw new IoTDBR2dbcException(
-            String.format(
-                R2dbcMessages.EXCEPTION_UNEXPECTED_ARG_RESPONSE_FROM_IOTDB_6A4FBFB0,
-                "executeStatement"));
-      }
-      boolean ignoreTimeStamp = response.isIgnoreTimeStamp();
-      List<String> names = new ArrayList<>(serverColumns.size() + 1);
-      List<TSDataType> types = new ArrayList<>(serverColumns.size() + 1);
-      if (!ignoreTimeStamp) {
-        // Tree model responses omit the time column; it is prepended like the session client does.
-        names.add(TIME_COLUMN_NAME);
-        types.add(TSDataType.TIMESTAMP);
-      }
-      for (int i = 0; i < serverColumns.size(); i++) {
-        names.add(serverColumns.get(i));
-        types.add(IoTDBTypeMapper.parse(serverTypes.get(i)));
-      }
-      int[] tsBlockIndexes = new int[names.size()];
-      List<Integer> serverMapping = response.getColumnIndex2TsBlockColumnIndexList();
-      int offset = ignoreTimeStamp ? 0 : 1;
-      if (!ignoreTimeStamp) {
-        tsBlockIndexes[0] = -1;
-      }
-      for (int i = 0; i < serverColumns.size(); i++) {
-        int mapped =
-            serverMapping != null && serverMapping.size() == serverColumns.size()
-                ? serverMapping.get(i)
-                : i;
-        tsBlockIndexes[offset + i] = mapped;
-      }
-      return new Columns(names, types, tsBlockIndexes);
-    }
   }
 }

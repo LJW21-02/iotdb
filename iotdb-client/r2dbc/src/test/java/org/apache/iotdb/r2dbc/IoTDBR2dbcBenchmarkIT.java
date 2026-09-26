@@ -20,6 +20,7 @@
 package org.apache.iotdb.r2dbc;
 
 import org.apache.iotdb.isession.SessionDataSet;
+import org.apache.iotdb.r2dbc.client.SyncSharedCodecClient;
 import org.apache.iotdb.session.Session;
 
 import io.r2dbc.spi.Connection;
@@ -57,6 +58,7 @@ import static org.junit.Assert.assertTrue;
 public class IoTDBR2dbcBenchmarkIT {
 
   private static final String DATABASE = "r2dbc_bench";
+  private static final String QUERY = "SELECT v FROM " + DATABASE + ".samples ORDER BY time";
   // Configurable so the RTT arms can keep the run short while the latency is injected.
   private static final int ROWS = Integer.getInteger("iotdb.it.bench.rows", 500);
   private static final int QUERIES = Integer.getInteger("iotdb.it.bench.queries", 200);
@@ -68,8 +70,17 @@ public class IoTDBR2dbcBenchmarkIT {
   private static final long EXPECTED_SUM = (long) ROWS * (ROWS + 1) / 2;
 
   @BeforeClass
-  public static void requireServer() {
+  public static void requireServerAndFixtures() {
     Assume.assumeTrue(System.getProperty("iotdb.it.host") != null);
+    // The fixture is provisioned once, so every arm measures the same table whatever the order.
+    ConnectionFactory factory = factory();
+    Connection connection = Mono.from(factory.create()).block();
+    try {
+      provision(connection);
+    } finally {
+      Mono.from(connection.close()).block();
+      ((IoTDBR2dbcConnectionFactory) factory).close();
+    }
   }
 
   @Test
@@ -77,7 +88,6 @@ public class IoTDBR2dbcBenchmarkIT {
     ConnectionFactory factory = factory();
     Connection connection = Mono.from(factory.create()).block();
     try {
-      provision(connection);
       for (int i = 0; i < 20; i++) {
         assertEquals(EXPECTED_SUM, checksum(connection));
       }
@@ -188,6 +198,31 @@ public class IoTDBR2dbcBenchmarkIT {
     }
   }
 
+  /**
+   * Blocking transport with the driver codec: the same requests and the same row decoding as the
+   * non-blocking arm, read on the calling thread. The design document requires this arm before a
+   * difference between the driver and the session client can be attributed to anything.
+   */
+  @Test
+  public void blockingTransportWithDriverCodecBaseline() throws Exception {
+    IoTDBConnectionConfiguration configuration =
+        IoTDBConnectionConfiguration.from(optionsBuilder().build());
+    try (SyncSharedCodecClient baseline = SyncSharedCodecClient.open(configuration)) {
+      for (int i = 0; i < 20; i++) {
+        assertEquals(EXPECTED_SUM, baseline.sumOfIntegerColumn(QUERY, FETCH_SIZE, "v"));
+      }
+      List<Long> latencies = new ArrayList<>(QUERIES);
+      long start = System.nanoTime();
+      for (int i = 0; i < QUERIES; i++) {
+        long queryStart = System.nanoTime();
+        assertEquals(EXPECTED_SUM, baseline.sumOfIntegerColumn(QUERY, FETCH_SIZE, "v"));
+        latencies.add(System.nanoTime() - queryStart);
+      }
+      double seconds = (System.nanoTime() - start) / 1_000_000_000.0;
+      report("sync+drivercodec" + transportLabel() + " sequential", QUERIES, seconds, latencies, 0);
+    }
+  }
+
   private static void report(
       String label, int queries, double seconds, List<Long> latencies, int threadDelta) {
     double qps = queries / seconds;
@@ -216,11 +251,7 @@ public class IoTDBR2dbcBenchmarkIT {
 
   private static long checksum(Connection connection) {
     List<Row> rows =
-        Flux.from(
-                connection
-                    .createStatement("SELECT v FROM " + DATABASE + ".samples ORDER BY time")
-                    .fetchSize(FETCH_SIZE)
-                    .execute())
+        Flux.from(connection.createStatement(QUERY).fetchSize(FETCH_SIZE).execute())
             .flatMap(result -> result.map((row, metadata) -> row))
             .collectList()
             .block();
@@ -235,9 +266,7 @@ public class IoTDBR2dbcBenchmarkIT {
   private static long sessionChecksum(Session session) throws Exception {
     long sum = 0;
     int rows = 0;
-    try (SessionDataSet dataSet =
-        session.executeQueryStatement(
-            "SELECT v FROM " + DATABASE + ".samples ORDER BY time", 30_000)) {
+    try (SessionDataSet dataSet = session.executeQueryStatement(QUERY, 30_000)) {
       SessionDataSet.DataIterator iterator = dataSet.iterator();
       while (iterator.next()) {
         sum += iterator.getInt(1);

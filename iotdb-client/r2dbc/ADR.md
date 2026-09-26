@@ -106,14 +106,23 @@ update count differences, and 6 further tests are excluded with reasons.
   is the main maintenance cost of the decision and the main argument for Netty if it grows.
 - Known capability differences stay visible: no cross statement transactions, no affected row counts,
   no Snappy, no query redirection, no `DATE` parameters, server side cancellation not implemented.
+- Thrift's async client writes the frame size and the frame payload as two socket writes
+  (`TAsyncMethodCall` states `WRITING_REQUEST_SIZE` and `WRITING_REQUEST`), so a request reaches the
+  wire as two segments where a blocking client's two writes are coalesced into one. On a LAN this is
+  invisible; with latency injected per chunk it costs one extra transport delay per request, which is
+  what the RTT arms in `PERFORMANCE.md` measure. A coalescing layer between the async client and the
+  socket is the candidate fix; it is not implemented because the deferred size prefix has to be
+  reported back through `TNonblockingTransport.write(ByteBuffer)`, where a wrong partial write report
+  corrupts the protocol instead of failing a test.
 
 ## Re-evaluation trigger
 
-Revisit the Netty option when any of the following holds: a required feature (for example mutual TLS
-with hardware keys, proxy support, or very high connection counts per factory) cannot be met by the
-nio transport; a defect in the TLS state machine cannot be fixed with contained changes; or the
-measured maintenance cost of the hand written transport exceeds the estimated cost of the Netty
-path.
+Revisit the Netty option when any of the following holds: the two socket writes per request turn
+into a measured problem on a real WAN path (and a coalescing layer cannot be added safely); a
+required feature (for example mutual TLS with hardware keys, proxy support, or very high connection
+counts) cannot be met by the nio transport; a defect in the TLS state machine cannot be fixed with
+contained changes; or the measured maintenance cost of the hand written transport exceeds the
+estimated cost of the Netty path.
 
 ## Reproducing
 
@@ -121,6 +130,10 @@ path.
 # plaintext suites (benchmark, soak, integration, pool) and the TLS suite
 mvn test -pl iotdb-client/r2dbc -Dtest='IoTDBR2dbcBenchmarkIT,IoTDBR2dbcSoakIT' ...
 mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcTlsIT -Diotdb.it.tls.port=... -Diotdb.it.tls.trustStore=...
+
+# the benchmark IT measures all four arms, including the blocking transport with the driver codec
+# the RTT arms put .r2dbc-validation/rtt_proxy.py (delay per chunk) in front of the server
+# .r2dbc-validation/frame_proxy.py counts frames and chunks per connection for one arm at a time
 # JFR recording of the mixed workload
 mvn test -pl iotdb-client/r2dbc -Dtest='IoTDBR2dbcBenchmarkIT,IoTDBR2dbcSoakIT' \
     -DargLine="-XX:StartFlightRecording=filename=run.jfr,settings=profile,dumponexit=true"
