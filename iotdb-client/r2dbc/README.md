@@ -197,5 +197,12 @@ promise.
 
 ## Follow-up work
 
-The TLS performance arm, Snappy conclusions, multi-node redirection, `DATE` parameter semantics and
-a longer running stability suite are tracked by the milestones of the design document above.
+Open items, tracked by the milestones of the design document above:
+
+- A longer running stability suite (hours rather than the current soak rounds) on one instance, and a
+  cluster run in which one DataNode disappears while the driver keeps working on the others.
+- A write coalescing layer for the non-blocking transport. Thrift's async client writes the frame
+  size and payload as two socket writes, which costs one extra transport delay per request on a high
+  latency path (`PERFORMANCE.md`, "RTT arm"); on a LAN it is not visible.
+- Repository level packaging checks: the module is part of the root reactor, its dependencies are
+  listed in `dependencies.json`, and the module builds with the RAT and spotless checks enabled.
