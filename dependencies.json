@@ -34,7 +34,6 @@
         "commons-logging:commons-logging",
         "io.airlift:airline",
         "io.airlift:units",
-        "io.r2dbc:r2dbc-pool",
         "io.r2dbc:r2dbc-spi",
         "io.dropwizard.metrics:metrics-core",
         "io.github.classgraph:classgraph",
