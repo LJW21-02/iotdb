@@ -85,11 +85,32 @@ Durations accept an ISO-8601 value or an integer number of milliseconds. Values 
 strings and are converted defensively; invalid, negative or conflicting values fail before any
 connection is opened.
 
+## Server version requirements
+
+The driver speaks the RPC surface of the IoTDB revision it is built from. It does not probe the
+server and does not fall back to another path when an RPC is missing, so a version mismatch surfaces
+as an error instead of silently different behaviour.
+
+Verified server: the revision this module is developed against, IoTDB `2.0.11-SNAPSHOT` at commit
+`1151ba762ff82ab377071e69664de6b6d3f30328` (single node and 1C3D cluster, plaintext and TLS). No
+published release binary and no Edge distribution was tested, so the table states requirements rather
+than a release compatibility claim.
+
+| Requirement | Introduced upstream | What fails without it |
+|-|-|-|
+| `executeStatementV2`, `fetchResultsV2`, `requestStatementId`, `getProperties` | commit `a45248d495` (2023-08-18) | Session setup and statements fail immediately. |
+| `prepareStatement`, `executePreparedStatement`, `deallocatePreparedStatement` | PR #17027, commit `8896075ab1` (2026-02-06) | **Every table model query that binds parameters** fails with `Invalid method name: 'prepareStatement'` (a `TApplicationException` from the server, reported as a statement execution failure). Writes, DDL, compound statements and tree model statements are unaffected: they use the literal path. |
+| Table model (`iotdb.sqlDialect=table`, the default) | 2.0.x | Table model statements are rejected; use `iotdb.sqlDialect=tree` on older servers. |
+
+To check a server, read the version the driver reports (`ConnectionMetadata.getDatabaseVersion()`,
+printed by the demo project's `connection` step), or run a table model query with a bound parameter:
+`Invalid method name: 'prepareStatement'` means the server predates #17027.
+
 ## Capability matrix
 
 | Capability | State |
 |-|-|
-| Table model, `SELECT` / `INSERT` / DDL | Supported, verified end to end. |
+| Table model, `SELECT` / `INSERT` / DDL | Supported, verified end to end on the server revision listed above. |
 | Tree model queries and writes | Supported; the time column is exposed as `Time` (`TIMESTAMP`), the default `LocalDateTime`, with `get(..., Long.class)`/`get(..., Instant.class)` for raw ticks and instants. |
 | Typed parameters | Table model queries with `String`, `Boolean`, `Byte`/`Short`/`Integer`, `Long`, `Float`, `Double` and `Instant`/`LocalDateTime`, using the server side prepare RPC. |
 | Time parameters | `Instant` and `LocalDateTime` are converted to epoch ticks in the session precision (`iotdb.timeZone` resolves `LocalDateTime`); ambiguous DST times and precision loss are rejected. An ISO-8601 string is *not* accepted by the server for a `TIMESTAMP` comparison (`Cannot apply operator: TIMESTAMP < STRING`), so ticks are the only verified form. |
