@@ -91,22 +91,29 @@ connection is opened.
 
 The driver speaks the RPC surface of the IoTDB revision it is built from. It does not probe the
 server and does not fall back to another path when an RPC is missing, so a version mismatch surfaces
-as an error instead of silently different behaviour.
+as an error instead of silently different behaviour. The table below was checked against the official
+`apache/iotdb` tags (`client.thrift` for the RPCs and `TSStatusCode` for the table model status
+codes), not inferred from release dates:
 
-Verified server: the revision this module is developed against, IoTDB `2.0.11-SNAPSHOT` at commit
-`1151ba762ff82ab377071e69664de6b6d3f30328` (single node and 1C3D cluster, plaintext and TLS). No
-published release binary and no Edge distribution was tested, so the table states requirements rather
-than a release compatibility claim.
+| IoTDB version | Table model (table SQL) | Table model query **with parameters** (typed prepare) | Tree model / writes / DDL / compound | Notes |
+|-|-|-|-|-|
+| 1.3.x (checked `v1.3.7`) | no | not usable | required RPCs present, **not tested** | 1.x has no table model |
+| 2.0.2 - 2.0.8 (each of `v2.0.2` ... `v2.0.8` checked) | yes | **fails with `Invalid method name: 'prepareStatement'`** | required RPCs present, **not tested** | table model present, prepare RPCs absent |
+| 2.0.10, 2.0.11 | yes | yes | required RPCs present, **not tested** | prepare RPCs appear in 2.0.10 |
+| 2.0.11-SNAPSHOT (base commit `1151ba762ff82ab377071e69664de6b6d3f30328`) | yes | yes | yes | **the only version tested end to end** (single node + 1C3D, plaintext + TLS) |
 
-| Requirement | Introduced upstream | What fails without it |
-|-|-|-|
-| `executeStatementV2`, `fetchResultsV2`, `requestStatementId`, `getProperties` | commit `a45248d495` (2023-08-18) | Session setup and statements fail immediately. |
-| `prepareStatement`, `executePreparedStatement`, `deallocatePreparedStatement` | PR #17027, commit `8896075ab1` (2026-02-06) | **Every table model query that binds parameters** fails with `Invalid method name: 'prepareStatement'` (a `TApplicationException` from the server, reported as a statement execution failure). Writes, DDL, compound statements and tree model statements are unaffected: they use the literal path. |
-| Table model (`iotdb.sqlDialect=table`, the default) | 2.0.x | Table model statements are rejected; use `iotdb.sqlDialect=tree` on older servers. |
+- 2.0.9 was never released: the tags jump from `v2.0.8` to `v2.0.10`.
+- Only the base revision was tested end to end. For the other versions only the presence of the
+  required RPCs in that version's code was checked, so "not tested" means the version may still lack
+  a capability the driver relies on.
+- To check a server: run a table model query with a bound parameter (`Invalid method name:
+  'prepareStatement'` means the server predates 2.0.10), or read the version the driver reports
+  (`ConnectionMetadata.getDatabaseVersion()`).
+- Versions before 1.3 have a different module layout and were not checked.
 
-To check a server, read the version the driver reports (`ConnectionMetadata.getDatabaseVersion()`,
-printed by the demo project's `connection` step), or run a table model query with a bound parameter:
-`Invalid method name: 'prepareStatement'` means the server predates #17027.
+Behind the table: `executeStatementV2`, `fetchResultsV2`, `requestStatementId` and `getProperties`
+(upstream since commit `a45248d495`, 2023-08-18) and `prepareStatement`, `executePreparedStatement`
+and `deallocatePreparedStatement` (PR #17027, commit `8896075ab1`, 2026-02-06, first release 2.0.10).
 
 ## Capability matrix
 
