@@ -55,7 +55,9 @@ Mono.from(factory.create())
     .subscribe(System.out::println);
 ```
 
-The connection URL form is also supported: `r2dbc:iotdb://user:password@host:6667/database`. TLS
+The connection URL form is also supported: `r2dbc:iotdb://user:password@host:6667/database`
+(credentials belong to the user info part; the SPI rejects `?user=...&password=...` in the query string,
+while driver options such as `iotdb.sqlDialect`/`iotdb.fetchSize` pass through it). TLS
 URLs (`r2dbcs:`) are rejected at configuration time, see the capability matrix.
 
 ## Options
@@ -119,6 +121,7 @@ printed by the demo project's `connection` step), or run a table model query wit
 | Connection pool | Verified with `r2dbc-pool` 1.0.2: borrow, `LOCAL` validation, release, lifecycle reset and reuse of the same connection. |
 | Prepared statements | One server side handle per execution; a statement that fails after prepare is deallocated, so the next execution cannot collide with a leaked handle. |
 | Parameters | Zero-based positional indexes as required by the SPI; `io.r2dbc.spi.Parameter` wrappers (used by frameworks) are unwrapped and typed nulls become `bindNull`. |
+| Output parameters | Not supported. `Parameters.out(...)` is rejected at bind time; `Parameters.inOut(...)` is accepted as an input parameter because the SPI type also implements `Parameter.In`, and its output half is ignored, so a caller that expects a returned value gets none. |
 | Batch | Parameter free statements run in order and stop at the first failure; effects of already executed statements are kept. |
 | Validation | `LOCAL` checks the local session state, `REMOTE` issues a light weight `getProperties` RPC. |
 | Stability | Verified against a live instance: 150 prepared executions in a row without leaking a server side handle, 300 rows paged with `fetchSize=7` without loss or duplication, demand driven consumption, 8 parallel connections sharing one selector runtime and 20 connect/close cycles that release their selector thread. |
