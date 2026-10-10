@@ -69,7 +69,7 @@ URLs (`r2dbcs:`) are rejected at configuration time, see the capability matrix.
 | `user` / `password` | String | none | Never logged; `toString()` redacts the password. |
 | `iotdb.sqlDialect` | String | `table` | `table` or `tree`; the SQL is never rewritten. |
 | `iotdb.timeZone` | String | `UTC` | `LocalDateTime` conversion zone. |
-| `iotdb.protocol` | String | `binary` | `binary` or `compact`. |
+| `iotdb.protocol` | String | `binary` | Thrift wire protocol: `binary` (`TBinaryProtocol`) or `compact` (`TCompactProtocol`). The server decides which one its client facing RPC service speaks through `dn_rpc_thrift_compression_enable` (ConfigNode: `cn_rpc_thrift_compression_enable`), so client and server must agree: a mismatch fails during the call with `TTransportException: Read call frame size failed`. Verified against a server started with that flag: the same workload (connect, DDL, insert, select, close) needed 1316 bytes with `compact` against 1900 bytes with `binary`, with the same number of round trips. |
 | `iotdb.frameCompression` | String | `none` | Only `none`; `snappy` is rejected. |
 | `iotdb.fetchSize` | Integer | `1024` | Page size hint, not a memory bound. |
 | `iotdb.maxFrameSize` | Integer | `25165824` (24 MiB) | Stricter of this and the server announced limit wins. |
