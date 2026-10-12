@@ -294,7 +294,7 @@ public record IoTDBConnectionConfiguration(
     if (parsed <= 0) {
       throw new IoTDBR2dbcException(
           String.format(
-              R2dbcMessages.EXCEPTION_OPTION_ARG_MUST_BE_A_POSITIVE_DURATION_BUT_WAS_ARG_9DD4E8F1,
+              R2dbcMessages.EXCEPTION_OPTION_ARG_MUST_BE_A_POSITIVE_INTEGER_BUT_WAS_ARG_389AAC64,
               option.name(),
               value));
     }

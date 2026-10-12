@@ -52,6 +52,7 @@ public final class R2dbcMessages {
   public static final String EXCEPTION_NAN_AND_INFINITY_ARE_NOT_SUPPORTED_AS_STATEMENT_PARAMETERS_AE049503 = "语句参数不支持 NaN 和无穷大";
   public static final String EXCEPTION_OPTION_ARG_MUST_BE_AN_INTEGER_BUT_WAS_ARG_1CAFFF31 = "选项 '%s' 必须为整数，实际为 '%s'";
   public static final String EXCEPTION_OPTION_ARG_MUST_BE_A_POSITIVE_DURATION_BUT_WAS_ARG_9DD4E8F1 = "选项 '%s' 必须为正的 Duration，实际为 '%s'";
+  public static final String EXCEPTION_OPTION_ARG_MUST_BE_A_POSITIVE_INTEGER_BUT_WAS_ARG_389AAC64 = "选项 '%s' 必须是正整数，实际为 '%s'";
   public static final String EXCEPTION_OPTION_ARG_MUST_BE_A_STRING_BUT_WAS_ARG_817A77EE = "选项 '%s' 必须为字符串，实际为 '%s'";
   public static final String EXCEPTION_OPTION_ARG_MUST_NOT_BE_EMPTY_C5532E9C = "选项 '%s' 不能为空";
   public static final String EXCEPTION_OPTION_ARG_MUST_NOT_BE_NEGATIVE_BUT_WAS_ARG_28DA7D3A = "选项 '%s' 不能为负数，实际为 '%s'";

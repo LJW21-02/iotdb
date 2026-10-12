@@ -131,9 +131,28 @@ public class IoTDBConnectionConfigurationTest {
     assertThrows(
         IoTDBR2dbcException.class,
         () -> from("r2dbc:iotdb://localhost:6667/demo?iotdb.timeZone=Mars/Olympus"));
-    assertThrows(
-        IoTDBR2dbcException.class,
-        () -> from("r2dbc:iotdb://localhost:6667/demo?iotdb.fetchSize=0"));
+    // An integer option must not be reported as a Duration, and the other way round. Both
+    // expectations are built from the message constants, so they hold in the zh build as well.
+    IoTDBR2dbcException nonPositiveFetchSize =
+        assertThrows(
+            IoTDBR2dbcException.class,
+            () -> from("r2dbc:iotdb://localhost:6667/demo?iotdb.fetchSize=0"));
+    assertEquals(
+        String.format(
+            R2dbcMessages.EXCEPTION_OPTION_ARG_MUST_BE_A_POSITIVE_INTEGER_BUT_WAS_ARG_389AAC64,
+            "iotdb.fetchSize",
+            "0"),
+        nonPositiveFetchSize.getMessage());
+    IoTDBR2dbcException zeroConnectTimeout =
+        assertThrows(
+            IoTDBR2dbcException.class,
+            () -> from("r2dbc:iotdb://localhost:6667/demo?connectTimeout=0"));
+    assertEquals(
+        String.format(
+            R2dbcMessages.EXCEPTION_OPTION_ARG_MUST_BE_A_POSITIVE_DURATION_BUT_WAS_ARG_9DD4E8F1,
+            "connectTimeout",
+            "0"),
+        zeroConnectTimeout.getMessage());
     assertThrows(
         IoTDBR2dbcException.class,
         () -> from("r2dbc:iotdb://localhost:6667/demo?iotdb.fetchSize=many"));

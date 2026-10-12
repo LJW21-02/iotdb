@@ -52,6 +52,7 @@ public final class R2dbcMessages {
   public static final String EXCEPTION_NAN_AND_INFINITY_ARE_NOT_SUPPORTED_AS_STATEMENT_PARAMETERS_AE049503 = "NaN and infinity are not supported as statement parameters";
   public static final String EXCEPTION_OPTION_ARG_MUST_BE_AN_INTEGER_BUT_WAS_ARG_1CAFFF31 = "Option '%s' must be an integer, but was '%s'";
   public static final String EXCEPTION_OPTION_ARG_MUST_BE_A_POSITIVE_DURATION_BUT_WAS_ARG_9DD4E8F1 = "Option '%s' must be a positive Duration, but was '%s'";
+  public static final String EXCEPTION_OPTION_ARG_MUST_BE_A_POSITIVE_INTEGER_BUT_WAS_ARG_389AAC64 = "Option '%s' must be a positive integer, but was '%s'";
   public static final String EXCEPTION_OPTION_ARG_MUST_BE_A_STRING_BUT_WAS_ARG_817A77EE = "Option '%s' must be a string, but was '%s'";
   public static final String EXCEPTION_OPTION_ARG_MUST_NOT_BE_EMPTY_C5532E9C = "Option '%s' must not be empty";
   public static final String EXCEPTION_OPTION_ARG_MUST_NOT_BE_NEGATIVE_BUT_WAS_ARG_28DA7D3A = "Option '%s' must not be negative, but was '%s'";
