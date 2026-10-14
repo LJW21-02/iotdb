@@ -93,6 +93,18 @@ recorded as an observation to investigate rather than a tuned result.
 `TCK.md`: 17 of the 28 runnable TCK tests pass; the 11 failures are the documented transaction and
 update count differences, and 6 further tests are excluded with reasons.
 
+A failure the server reported keeps its type on every page: `ExceptionMapper.mapPageFailure` returns
+an `R2dbcException` unchanged, so a query timeout reported while reading a later page stays an
+`R2dbcTimeoutException` (transient, with the server message, code 720 and the SQL) instead of becoming
+a generic non transient driver exception. Measured on the single node probe with a slow consumer and
+`iotdb.serverQueryTimeout` just above the first page latency: before the change the same failure was
+`IoTDBR2dbcException: Reading the next page failed: IoTDB server error: Query has executed more than
+104ms, and now is in flushing state` after 2320 rows, after it `R2dbcTimeoutException: IoTDB server
+error: Query has executed more than 105ms, and now is in flushing state` after 2960 rows. The server
+enforces the budget in `MPPQueryContext.checkTimeOut` during analysis and in
+`FragmentInstanceManager.cancelTimeoutFlushingInstances` (every 2 s) for instances that are still
+flushing past their deadline; a fast consumer can therefore see the timeout on the first page.
+
 ## Consequences
 
 - The transport is reusable for plaintext and TLS with the same async client, request serialization
@@ -136,6 +148,9 @@ mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcTlsIT -Diotdb.it.tls.port=... -
 # .r2dbc-validation/frame_proxy.py counts frames and chunks per connection for one arm at a time
 # .r2dbc-validation/stall_proxy.py keeps the socket open but stops answering, for the timeout case:
 mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcSoakIT     -Diotdb.it.stallProxy=.../.r2dbc-validation/stall_proxy.py -Diotdb.it.host=... ...
+# .r2dbc-validation/PageTimeoutProbe.java drives the page phase timeout A/B (slow consumer plus a
+# server query budget just above the first page); run it with the driver classes of the build under
+# test in front of the distribution lib/* of the matching server, not with locally resolved snapshots
 # JFR recording of the mixed workload
 mvn test -pl iotdb-client/r2dbc -Dtest='IoTDBR2dbcBenchmarkIT,IoTDBR2dbcSoakIT' \
     -DargLine="-XX:StartFlightRecording=filename=run.jfr,settings=profile,dumponexit=true"

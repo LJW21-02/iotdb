@@ -76,7 +76,7 @@ URLs (`r2dbcs:`) are rejected at configuration time, see the capability matrix.
 | `connectTimeout` | Duration | `10s` | Total budget for connect + session setup. |
 | `statementTimeout` | Duration | `ZERO` | Until the first execution response; `ZERO` disables it. |
 | `iotdb.rpcTimeout` | Duration | `60s` | Per RPC budget; running out of it is reported as `R2dbcTimeoutException` and marks the connection as broken. |
-| `iotdb.serverQueryTimeout` | Duration | none | Server side budget; absent follows the server default. |
+| `iotdb.serverQueryTimeout` | Duration | none | Server side budget; absent follows the server default. Reported as `R2dbcTimeoutException` whether it lands on the first page or a later one, and the connection stays usable. |
 | `iotdb.cleanupTimeout` | Duration | `10s` | Cursor/handle cleanup budget. |
 | `iotdb.maxRedirects` | Integer | `3` | How many server recommended redirections one statement may follow. |
 | `ssl` / `r2dbcs:` | Boolean or string `true` | disabled | Enables TLS; the string `false` and any other value are rejected. |

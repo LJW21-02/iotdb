@@ -123,6 +123,24 @@ public final class ExceptionMapper {
   }
 
   /**
+   * Maps a failure that happened while reading the next page of an active query.
+   *
+   * <p>A failure the server reported keeps its own type so that the page phase reports the same
+   * exception as the execute phase for the same status; wrapping it would hide the status code and
+   * the transient classification from the caller. A transport failure carries no message of its
+   * own, so it keeps the page context and the usual timeout classification.
+   */
+  public static R2dbcException mapPageFailure(Throwable error) {
+    if (error instanceof R2dbcException) {
+      return (R2dbcException) error;
+    }
+    return mapTransportFailure(
+        String.format(
+            R2dbcMessages.EXCEPTION_READING_THE_NEXT_PAGE_FAILED_ARG_74678706, error.getMessage()),
+        error);
+  }
+
+  /**
    * Whether a failure was caused by running out of time.
    *
    * <p>Both shapes are covered because the transport reports them differently: the JDK throws

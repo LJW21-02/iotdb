@@ -244,12 +244,7 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
                 finished = true;
               }
               close();
-              sink.error(
-                  ExceptionMapper.mapTransportFailure(
-                      String.format(
-                          R2dbcMessages.EXCEPTION_READING_THE_NEXT_PAGE_FAILED_ARG_74678706,
-                          error.getMessage()),
-                      error));
+              sink.error(ExceptionMapper.mapPageFailure(error));
             });
   }
 

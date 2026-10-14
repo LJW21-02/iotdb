@@ -22,8 +22,10 @@ package org.apache.iotdb.r2dbc.exception;
 import org.apache.iotdb.common.rpc.thrift.TSStatus;
 import org.apache.iotdb.rpc.TSStatusCode;
 
+import io.r2dbc.spi.R2dbcBadGrammarException;
 import io.r2dbc.spi.R2dbcException;
 import io.r2dbc.spi.R2dbcTimeoutException;
+import io.r2dbc.spi.R2dbcTransientException;
 import org.apache.thrift.transport.TTransportException;
 import org.junit.Test;
 
@@ -32,6 +34,7 @@ import java.util.concurrent.TimeoutException;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 /** Timeout classification and status mapping, which decide the exception type a caller catches. */
@@ -71,5 +74,54 @@ public class ExceptionMapperTest {
     R2dbcException mapped = ExceptionMapper.mapStatus(status, "select 1");
     assertEquals(TSStatusCode.INTERNAL_SERVER_ERROR.getStatusCode(), mapped.getErrorCode());
     assertTrue(mapped.getMessage().contains("boom"));
+  }
+
+  @Test
+  public void aServerStatusOnAPageKeepsItsOwnTypeCodeAndSql() {
+    TSStatus timeout = new TSStatus(TSStatusCode.QUERY_TIMEOUT.getStatusCode());
+    timeout.setMessage("Current query is time out");
+    R2dbcException fromExecute = ExceptionMapper.mapStatus(timeout, "select * from t");
+
+    R2dbcException fromPage = ExceptionMapper.mapPageFailure(fromExecute);
+
+    assertSame(
+        "the page phase must not re classify a status the server already reported",
+        fromExecute,
+        fromPage);
+    assertTrue(fromPage instanceof R2dbcTimeoutException);
+    assertTrue(fromPage instanceof R2dbcTransientException);
+    assertEquals(TSStatusCode.QUERY_TIMEOUT.getStatusCode(), fromPage.getErrorCode());
+    assertEquals("select * from t", fromPage.getSql());
+  }
+
+  @Test
+  public void aNonTimeoutServerStatusOnAPageKeepsItsSpecificType() {
+    TSStatus semanticError = new TSStatus(TSStatusCode.SEMANTIC_ERROR.getStatusCode());
+    semanticError.setMessage("unknown column");
+
+    R2dbcException fromPage =
+        ExceptionMapper.mapPageFailure(ExceptionMapper.mapStatus(semanticError, "select x from t"));
+
+    assertTrue(fromPage instanceof R2dbcBadGrammarException);
+    assertEquals(TSStatusCode.SEMANTIC_ERROR.getStatusCode(), fromPage.getErrorCode());
+  }
+
+  @Test
+  public void aTransportTimeoutOnAPageIsReportedAsATimeoutWithThePageContext() {
+    TTransportException thriftTimeout = new TTransportException(TTransportException.TIMED_OUT);
+
+    R2dbcException mapped = ExceptionMapper.mapPageFailure(thriftTimeout);
+
+    assertTrue(mapped instanceof R2dbcTimeoutException);
+    assertTrue(mapped.getMessage().contains("Reading the next page failed"));
+  }
+
+  @Test
+  public void aPlainTransportFailureOnAPageStaysGenericAndKeepsThePageContext() {
+    R2dbcException mapped = ExceptionMapper.mapPageFailure(new IOException("connection reset"));
+
+    assertTrue(mapped instanceof IoTDBR2dbcException);
+    assertFalse(mapped instanceof R2dbcTransientException);
+    assertTrue(mapped.getMessage().contains("Reading the next page failed"));
   }
 }
