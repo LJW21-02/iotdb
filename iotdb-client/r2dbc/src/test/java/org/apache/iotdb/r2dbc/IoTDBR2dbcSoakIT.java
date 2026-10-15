@@ -31,6 +31,8 @@ import io.r2dbc.spi.ValidationDepth;
 import org.junit.Assume;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.reactivestreams.Subscription;
+import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -45,9 +47,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
@@ -212,18 +216,7 @@ public class IoTDBR2dbcSoakIT {
     Path stallFile = Files.createTempFile("r2dbc-stall", ".flag");
     Files.delete(stallFile);
     int proxyPort = freePort();
-    Process proxy =
-        new ProcessBuilder(
-                "python",
-                Path.of(System.getProperty("iotdb.it.stallProxy")).toString(),
-                "--listen-port",
-                String.valueOf(proxyPort),
-                "--target-port",
-                String.valueOf(Integer.getInteger("iotdb.it.port", 6667)),
-                "--stall-file",
-                stallFile.toString())
-            .redirectErrorStream(true)
-            .start();
+    Process proxy = startStallProxy(stallFile, proxyPort);
     ConnectionFactory factory = factory(proxyPort, Duration.ofSeconds(3));
     try {
       awaitPort(proxyPort);
@@ -269,6 +262,107 @@ public class IoTDBR2dbcSoakIT {
     }
   }
 
+  /**
+   * A silent server must not make close() hang. The cleanup budget bounds the closeSession round
+   * trip while the per RPC budget stays out of the way, the socket is closed either way, and the
+   * caller sees a normal completion because closing is best effort.
+   */
+  @Test
+  public void closingAConnectionWithASilentServerStaysWithinTheCleanupTimeout() throws Exception {
+    Path stallFile = Files.createTempFile("r2dbc-stall", ".flag");
+    Files.delete(stallFile);
+    int proxyPort = freePort();
+    Process proxy = startStallProxy(stallFile, proxyPort);
+    ConnectionFactory factory = factory(proxyPort, Duration.ofMinutes(10), Duration.ofSeconds(1));
+    try {
+      awaitPort(proxyPort);
+      Connection connection = Mono.from(factory.create()).block();
+      provision(connection);
+      Files.createFile(stallFile);
+
+      long start = System.nanoTime();
+      Mono.from(connection.close()).block(Duration.ofSeconds(5));
+      long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
+
+      assertTrue(
+          "close must return on the cleanup budget, not on the ten minute RPC budget, took "
+              + elapsedMillis
+              + " ms",
+          elapsedMillis < 5_000);
+    } finally {
+      ((IoTDBR2dbcConnectionFactory) factory).close();
+      proxy.destroyForcibly();
+      proxy.waitFor();
+      Files.deleteIfExists(stallFile);
+    }
+  }
+
+  /**
+   * Abandoning a result releases the query handle with a request that queues behind the stalled
+   * fetch, so the cleanup budget rather than the per RPC budget decides. A connection whose cleanup
+   * did not finish must be destroyed instead of being handed back with an unknown protocol state.
+   */
+  @Test
+  public void abandoningAResultWithASilentServerDestroysTheConnection() throws Exception {
+    Path stallFile = Files.createTempFile("r2dbc-stall", ".flag");
+    Files.delete(stallFile);
+    int proxyPort = freePort();
+    Process proxy = startStallProxy(stallFile, proxyPort);
+    ConnectionFactory factory = factory(proxyPort, Duration.ofMinutes(10), Duration.ofSeconds(1));
+    try {
+      awaitPort(proxyPort);
+      Connection connection = Mono.from(factory.create()).block();
+      provision(connection);
+      Statement statement = connection.createStatement(selectAllText());
+      statement.fetchSize(1);
+      // Demand one row only: the query is open on the server (a query id exists) but no fetch is in
+      // flight, so cancelling afterwards releases the handle with a single request that the silent
+      // server never answers.
+      CountDownLatch firstRow = new CountDownLatch(1);
+      BaseSubscriber<Row> rows =
+          new BaseSubscriber<Row>() {
+            @Override
+            protected void hookOnSubscribe(Subscription subscription) {
+              request(1);
+            }
+
+            @Override
+            protected void hookOnNext(Row row) {
+              firstRow.countDown();
+            }
+          };
+      Flux.from(statement.execute())
+          .flatMap(result -> result.map((row, metadata) -> row), 1, 1)
+          .subscribe(rows);
+      try {
+        assertTrue(
+            "the query must deliver a row before the server goes silent",
+            firstRow.await(30, TimeUnit.SECONDS));
+        Files.createFile(stallFile);
+        rows.cancel();
+
+        long elapsedMillis = awaitClosed(connection, Duration.ofSeconds(5));
+
+        assertTrue(
+            "the cleanup budget must decide, not the ten minute RPC budget, took "
+                + elapsedMillis
+                + " ms",
+            elapsedMillis < 5_000);
+        assertThrows(
+            "a connection whose cleanup timed out must not be reused",
+            Throwable.class,
+            () -> Mono.from(connection.createStatement(selectAllText()).execute()).block());
+      } finally {
+        rows.cancel();
+      }
+    } finally {
+      ((IoTDBR2dbcConnectionFactory) factory).close();
+      proxy.destroyForcibly();
+      proxy.waitFor();
+      Files.deleteIfExists(stallFile);
+    }
+  }
+
   private static int freePort() throws Exception {
     try (ServerSocket socket = new ServerSocket(0)) {
       return socket.getLocalPort();
@@ -285,6 +379,37 @@ public class IoTDBR2dbcSoakIT {
       }
     }
     throw new AssertionError("proxy did not start on port " + port);
+  }
+
+  /**
+   * Starts the silent but connected server helper; creating the flag file switches it to stalling.
+   */
+  private static Process startStallProxy(Path stallFile, int proxyPort) throws IOException {
+    return new ProcessBuilder(
+            "python",
+            Path.of(System.getProperty("iotdb.it.stallProxy")).toString(),
+            "--listen-port",
+            String.valueOf(proxyPort),
+            "--target-port",
+            String.valueOf(Integer.getInteger("iotdb.it.port", 6667)),
+            "--stall-file",
+            stallFile.toString())
+        .redirectErrorStream(true)
+        .start();
+  }
+
+  /** Waits until the driver reports the connection as destroyed and returns the elapsed time. */
+  private static long awaitClosed(Connection connection, Duration budget)
+      throws InterruptedException {
+    long start = System.nanoTime();
+    long deadline = start + budget.toNanos();
+    while (System.nanoTime() < deadline) {
+      if (!Boolean.TRUE.equals(Mono.from(connection.validate(ValidationDepth.LOCAL)).block())) {
+        return (System.nanoTime() - start) / 1_000_000;
+      }
+      Thread.sleep(50);
+    }
+    throw new AssertionError("the connection was not destroyed within " + budget);
   }
 
   /**
@@ -443,11 +568,22 @@ public class IoTDBR2dbcSoakIT {
 
   /** A factory on another port, with a per RPC budget short enough for a test. */
   private static ConnectionFactory factory(int port, Duration rpcTimeout) {
-    return ConnectionFactories.get(
+    return factory(port, rpcTimeout, null);
+  }
+
+  /**
+   * Same, with a cleanup budget short enough to observe it: the per RPC budget stays long so the
+   * measured time can only come from the cleanup budget.
+   */
+  private static ConnectionFactory factory(int port, Duration rpcTimeout, Duration cleanupTimeout) {
+    ConnectionFactoryOptions.Builder builder =
         options()
             .option(ConnectionFactoryOptions.PORT, port)
-            .option(IoTDBConnectionFactoryOptions.RPC_TIMEOUT, rpcTimeout)
-            .build());
+            .option(IoTDBConnectionFactoryOptions.RPC_TIMEOUT, rpcTimeout);
+    if (cleanupTimeout != null) {
+      builder.option(IoTDBConnectionFactoryOptions.CLEANUP_TIMEOUT, cleanupTimeout);
+    }
+    return ConnectionFactories.get(builder.build());
   }
 
   private static ConnectionFactoryOptions.Builder options() {

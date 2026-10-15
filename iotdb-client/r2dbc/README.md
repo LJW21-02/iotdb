@@ -77,7 +77,7 @@ URLs (`r2dbcs:`) are rejected at configuration time, see the capability matrix.
 | `statementTimeout` | Duration | `ZERO` | Until the first execution response; `ZERO` disables it. |
 | `iotdb.rpcTimeout` | Duration | `60s` | Per RPC budget; running out of it is reported as `R2dbcTimeoutException` and marks the connection as broken. |
 | `iotdb.serverQueryTimeout` | Duration | none | Server side budget; absent follows the server default. Reported as `R2dbcTimeoutException` whether it lands on the first page or a later one, and the connection stays usable. |
-| `iotdb.cleanupTimeout` | Duration | `10s` | Cursor/handle cleanup budget. |
+| `iotdb.cleanupTimeout` | Duration | `10s` | Budget for cursor/handle cleanup and for closing. A silent server does not make `close()` hang, and a connection whose query handle could not be released is destroyed instead of being reused. |
 | `iotdb.maxRedirects` | Integer | `3` | How many server recommended redirections one statement may follow. |
 | `ssl` / `r2dbcs:` | Boolean or string `true` | disabled | Enables TLS; the string `false` and any other value are rejected. |
 | `iotdb.trustStore` / `iotdb.trustStorePassword` | String | JVM default trust store | Certificate chain verification; the host name is always verified against the certificate. |

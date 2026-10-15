@@ -148,6 +148,9 @@ mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcTlsIT -Diotdb.it.tls.port=... -
 # .r2dbc-validation/frame_proxy.py counts frames and chunks per connection for one arm at a time
 # .r2dbc-validation/stall_proxy.py keeps the socket open but stops answering, for the timeout case:
 mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcSoakIT     -Diotdb.it.stallProxy=.../.r2dbc-validation/stall_proxy.py -Diotdb.it.host=... ...
+# the cleanup budget bounds close(); both cases need the stalling helper, which keeps the socket
+# open but silent, with -Diotdb.it.stallProxy=.../.r2dbc-validation/stall_proxy.py:
+mvn test -pl iotdb-client/r2dbc -Dtest='IoTDBR2dbcSoakIT#closingAConnectionWithASilentServerStaysWithinTheCleanupTimeout+abandoningAResultWithASilentServerDestroysTheConnection' ...
 # .r2dbc-validation/PageTimeoutProbe.java drives the page phase timeout A/B (slow consumer plus a
 # server query budget just above the first page); run it with the driver classes of the build under
 # test in front of the distribution lib/* of the matching server, not with locally resolved snapshots
