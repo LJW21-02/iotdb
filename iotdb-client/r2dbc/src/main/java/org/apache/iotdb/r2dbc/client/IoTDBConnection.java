@@ -139,12 +139,15 @@ public final class IoTDBConnection implements Connection, Lifecycle {
     return Mono.fromCompletionStage(() -> handshake(configuration, client))
         .timeout(configuration.connectTimeout())
         .onErrorMap(
-            TimeoutException.class,
             error ->
-                new R2dbcTimeoutException(
-                    String.format(
-                        R2dbcMessages.EXCEPTION_THE_CONNECTION_ATTEMPT_TIMED_OUT_AFTER_ARG_EB558B68,
-                        configuration.connectTimeout())))
+                error instanceof R2dbcException
+                    ? error
+                    : ExceptionMapper.mapConnectFailure(
+                        configuration.host(),
+                        configuration.port(),
+                        configuration.tls().enabled(),
+                        configuration.connectTimeout(),
+                        error))
         .doOnError(error -> client.close())
         .map(
             handshake ->

@@ -23,6 +23,7 @@ import org.apache.iotdb.r2dbc.IoTDBConnectionConfiguration;
 import org.apache.iotdb.r2dbc.IoTDBConnectionConfiguration.TlsConfiguration;
 import org.apache.iotdb.r2dbc.R2dbcMessages;
 import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
+import org.apache.iotdb.r2dbc.exception.IoTDBTlsException;
 
 import org.apache.thrift.transport.TTransportException;
 
@@ -110,6 +111,7 @@ final class TlsSocketFactory {
   /** PKCS#12 is the format used by the tooling around this project; JKS is the fallback. */
   private static KeyStore loadKeyStore(String path, String password) {
     char[] secret = password == null ? null : password.toCharArray();
+    Exception failure = null;
     for (String type : new String[] {PKCS12, JKS}) {
       try (InputStream input = Files.newInputStream(Path.of(path))) {
         KeyStore keyStore = KeyStore.getInstance(type);
@@ -117,14 +119,16 @@ final class TlsSocketFactory {
         return keyStore;
       } catch (Exception e) {
         // try the next format
+        failure = e;
       }
     }
-    throw new IoTDBR2dbcException(
-        String.format(R2dbcMessages.EXCEPTION_FAILED_TO_INITIALIZE_TLS_ARG_770BBC57, path));
+    throw new IoTDBTlsException(
+        String.format(R2dbcMessages.EXCEPTION_FAILED_TO_INITIALIZE_TLS_ARG_770BBC57, path),
+        failure);
   }
 
-  private static IoTDBR2dbcException tlsFailure(Throwable cause) {
-    return new IoTDBR2dbcException(
+  private static IoTDBTlsException tlsFailure(Throwable cause) {
+    return new IoTDBTlsException(
         String.format(
             R2dbcMessages.EXCEPTION_FAILED_TO_INITIALIZE_TLS_ARG_770BBC57, cause.getMessage()),
         cause);

@@ -30,6 +30,7 @@ import io.r2dbc.spi.R2dbcPermissionDeniedException;
 import io.r2dbc.spi.R2dbcTimeoutException;
 import org.apache.thrift.transport.TTransportException;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeoutException;
 
@@ -138,6 +139,37 @@ public final class ExceptionMapper {
         String.format(
             R2dbcMessages.EXCEPTION_READING_THE_NEXT_PAGE_FAILED_ARG_74678706, error.getMessage()),
         error);
+  }
+
+  /**
+   * Maps a failed connection attempt.
+   *
+   * <p>Running out of the connect budget is a timeout. A failure while TLS is enabled is reported
+   * as {@link IoTDBTlsException} whatever the handshake stack said, because its message differs per
+   * platform (and per configured language) while a certificate problem is actionable; the original
+   * failure stays available as the cause. Everything else keeps the connection coordinates.
+   */
+  public static R2dbcException mapConnectFailure(
+      String host, int port, boolean tls, Duration connectTimeout, Throwable cause) {
+    if (isTimeout(cause)) {
+      return new R2dbcTimeoutException(
+          String.format(
+              R2dbcMessages.EXCEPTION_THE_CONNECTION_ATTEMPT_TIMED_OUT_AFTER_ARG_EB558B68,
+              connectTimeout),
+          cause);
+    }
+    if (tls) {
+      return new IoTDBTlsException(
+          String.format(
+              R2dbcMessages.EXCEPTION_FAILED_TO_CONNECT_TO_IOTDB_AT_ARG_ARG_OVER_TLS_DD4D72A8,
+              host,
+              port),
+          cause);
+    }
+    return new IoTDBR2dbcException(
+        String.format(
+            R2dbcMessages.EXCEPTION_FAILED_TO_CONNECT_TO_IOTDB_AT_ARG_ARG_2A934FC1, host, port),
+        cause);
   }
 
   /**

@@ -42,6 +42,8 @@ public final class R2dbcMessages {
   public static final String EXCEPTION_COLUMN_ARG_DOES_NOT_EXIST_FF67AE82 = "Column '%s' does not exist";
   public static final String EXCEPTION_COLUMN_INDEX_ARG_IS_OUT_OF_BOUNDS_THE_ROW_HAS_ARG_COLUMN_S_98C75AD7 = "Column index %d is out of bounds; the row has %d column(s)";
   public static final String EXCEPTION_FAILED_TO_CONNECT_TO_IOTDB_AT_ARG_ARG_2A934FC1 = "Failed to connect to IoTDB at %s:%d";
+
+  public static final String EXCEPTION_FAILED_TO_CONNECT_TO_IOTDB_AT_ARG_ARG_OVER_TLS_DD4D72A8 = "Failed to connect to IoTDB at %s:%d over TLS";
   public static final String EXCEPTION_FAILED_TO_CREATE_THE_R2DBC_RUNTIME_ARG_9766FF8E = "Failed to create the R2DBC runtime: %s";
   public static final String EXCEPTION_FAILED_TO_DECODE_A_TSBLOCK_ARG_050F52E4 = "Failed to decode a TsBlock: %s";
   public static final String EXCEPTION_FETCHSIZE_MUST_NOT_BE_NEGATIVE_BUT_WAS_ARG_8B2CA91B = "fetchSize must not be negative, but was %d";

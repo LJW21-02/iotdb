@@ -30,6 +30,8 @@ import org.apache.thrift.transport.TTransportException;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.net.ConnectException;
+import java.time.Duration;
 import java.util.concurrent.TimeoutException;
 
 import static org.junit.Assert.assertEquals;
@@ -74,6 +76,51 @@ public class ExceptionMapperTest {
     R2dbcException mapped = ExceptionMapper.mapStatus(status, "select 1");
     assertEquals(TSStatusCode.INTERNAL_SERVER_ERROR.getStatusCode(), mapped.getErrorCode());
     assertTrue(mapped.getMessage().contains("boom"));
+  }
+
+  @Test
+  public void aTlsConnectFailureIsReportedAsATlsFailure() {
+    Throwable handshake =
+        new IOException("handshake", new javax.net.ssl.SSLHandshakeException("peer closed"));
+
+    R2dbcException mapped =
+        ExceptionMapper.mapConnectFailure(
+            "127.0.0.1", 6667, true, Duration.ofSeconds(10), handshake);
+
+    assertTrue(mapped instanceof IoTDBTlsException);
+    assertTrue(
+        "a caller that knows only the driver exception must keep working",
+        mapped instanceof IoTDBR2dbcException);
+    assertSame(handshake, mapped.getCause());
+    assertTrue(mapped.getMessage().contains("127.0.0.1:6667"));
+    assertTrue(mapped.getMessage().contains("over TLS"));
+  }
+
+  @Test
+  public void aPlaintextConnectFailureKeepsTheCoordinatesAndStaysGeneric() {
+    Throwable refused = new ConnectException("Connection refused");
+
+    R2dbcException mapped =
+        ExceptionMapper.mapConnectFailure(
+            "127.0.0.1", 6667, false, Duration.ofSeconds(10), refused);
+
+    assertTrue(mapped instanceof IoTDBR2dbcException);
+    assertFalse(mapped instanceof IoTDBTlsException);
+    assertSame(refused, mapped.getCause());
+    assertTrue(mapped.getMessage().contains("127.0.0.1:6667"));
+  }
+
+  @Test
+  public void aConnectTimeoutIsReportedAsATimeoutAndKeepsTheCause() {
+    TimeoutException budget = new TimeoutException("connect budget");
+
+    R2dbcException mapped =
+        ExceptionMapper.mapConnectFailure("127.0.0.1", 6667, true, Duration.ofSeconds(10), budget);
+
+    assertTrue(mapped instanceof R2dbcTimeoutException);
+    assertFalse(mapped instanceof IoTDBTlsException);
+    assertSame(budget, mapped.getCause());
+    assertTrue(mapped.getMessage().contains("PT10S"));
   }
 
   @Test
