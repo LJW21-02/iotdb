@@ -54,6 +54,7 @@ import static org.junit.Assert.assertTrue;
 public class IoTDBR2dbcClusterIT {
 
   private static final String DATABASE = "r2dbc_cluster";
+  private static final String PROBE_DEVICE = "redirect_probe";
   private static final int ROWS = 30;
 
   @BeforeClass
@@ -156,8 +157,105 @@ public class IoTDBR2dbcClusterIT {
     }
   }
 
+  /**
+   * A write that lands on a DataNode that does not own the region is answered with a recommendation
+   * instead of a failure. With no budget left the driver must report the exhausted budget rather
+   * than write somewhere else; with a budget it must re-establish the session on the recommended
+   * node, and the row must then be visible from another node.
+   *
+   * <p>Which DataNode owns a device is decided by the cluster, so the test calibrates itself: it
+   * writes a distinct device from every DataNode with {@code iotdb.maxRedirects=0} and requires at
+   * least one refusal and one acceptance, then repeats a refused write with the default budget.
+   */
+  @Test
+  public void aWriteOnANonOwningDataNodeIsRedirectedWithinTheBudget() {
+    List<Integer> ports = clusterPorts();
+    ConnectionFactory provisioner = factory(ports.get(0));
+    try {
+      Connection connection = Mono.from(provisioner.create()).block();
+      try {
+        execute(connection, "CREATE DATABASE IF NOT EXISTS " + DATABASE);
+        execute(
+            connection,
+            "CREATE TABLE IF NOT EXISTS "
+                + DATABASE
+                + ".redirect_probe(device STRING TAG, v INT32 FIELD)");
+      } finally {
+        Mono.from(connection.close()).block();
+      }
+    } finally {
+      ((IoTDBR2dbcConnectionFactory) provisioner).close();
+    }
+
+    // Calibration: the same device is written from every DataNode, so exactly one DataNode owns the
+    // region and only that one may accept a write while the budget refuses every recommendation.
+    List<Integer> refused = new ArrayList<>();
+    for (int index = 0; index < ports.size(); index++) {
+      ConnectionFactory factory = factory(ports.get(index), 0);
+      try {
+        Connection connection = Mono.from(factory.create()).block();
+        try {
+          execute(connection, insertProbeRow(PROBE_DEVICE, 1_000 + index, 10 + index));
+        } catch (RuntimeException failure) {
+          assertTrue(
+              "a refused redirect must report the exhausted budget, was " + failure,
+              failure.getMessage() != null
+                  && failure
+                      .getMessage()
+                      .contains("The redirection budget of 0 hops is exhausted"));
+          refused.add(ports.get(index));
+        } finally {
+          Mono.from(connection.close()).block();
+        }
+      } finally {
+        ((IoTDBR2dbcConnectionFactory) factory).close();
+      }
+    }
+    assertTrue(
+        "no DataNode refused the write: no recommendation was exercised", !refused.isEmpty());
+    assertTrue(
+        "every DataNode refused the write: the fixture is unusable", refused.size() < ports.size());
+
+    // The default budget must follow the recommendation for the refused write.
+    int writerPort = refused.get(0);
+    ConnectionFactory writer = factory(writerPort);
+    try {
+      Connection connection = Mono.from(writer.create()).block();
+      try {
+        execute(connection, insertProbeRow(PROBE_DEVICE, 2_000, 77));
+      } finally {
+        Mono.from(connection.close()).block();
+      }
+    } finally {
+      ((IoTDBR2dbcConnectionFactory) writer).close();
+    }
+
+    int readerPort = ports.get(0) == writerPort ? ports.get(1) : ports.get(0);
+    ConnectionFactory reader = factory(readerPort);
+    try {
+      Connection connection = Mono.from(reader.create()).block();
+      try {
+        boolean found = false;
+        for (Row row : probeRows(connection)) {
+          if (PROBE_DEVICE.equals(row.get("device", String.class))
+              && Integer.valueOf(77).equals(row.get("v", Integer.class))) {
+            found = true;
+          }
+        }
+        assertTrue("the redirected write is not visible from port " + readerPort, found);
+      } finally {
+        Mono.from(connection.close()).block();
+      }
+    } finally {
+      ((IoTDBR2dbcConnectionFactory) reader).close();
+    }
+  }
+
   @Test
   public void brokenConnectionFailsFastAndIsNotReused() throws Exception {
+    Assume.assumeTrue(
+        "set -Diotdb.it.cluster.proxy=<path to rtt_proxy.py> to run it",
+        System.getProperty("iotdb.it.cluster.proxy") != null);
     int dataNodePort = clusterPorts().get(0);
     int proxyPort = freePort();
     Path proxyScript = Path.of(System.getProperty("iotdb.it.cluster.proxy"));
@@ -225,16 +323,45 @@ public class IoTDBR2dbcClusterIT {
   }
 
   private static ConnectionFactory factory(int port) {
-    ConnectionFactoryOptions options =
+    return factory(port, -1);
+  }
+
+  /** A budget of {@code -1} keeps the driver default, {@code 0} refuses any recommendation. */
+  private static ConnectionFactory factory(int port, int maxRedirects) {
+    ConnectionFactoryOptions.Builder builder =
         ConnectionFactoryOptions.builder()
             .option(ConnectionFactoryOptions.DRIVER, "iotdb")
             .option(ConnectionFactoryOptions.HOST, System.getProperty("iotdb.it.host"))
             .option(ConnectionFactoryOptions.PORT, port)
             .option(ConnectionFactoryOptions.USER, System.getProperty("iotdb.it.user"))
             .option(ConnectionFactoryOptions.PASSWORD, System.getProperty("iotdb.it.password"))
-            .option(IoTDBConnectionFactoryOptions.SQL_DIALECT, "table")
-            .build();
-    return ConnectionFactories.get(options);
+            .option(IoTDBConnectionFactoryOptions.SQL_DIALECT, "table");
+    if (maxRedirects >= 0) {
+      builder.option(IoTDBConnectionFactoryOptions.MAX_REDIRECTS, maxRedirects);
+    }
+    return ConnectionFactories.get(builder.build());
+  }
+
+  private static String insertProbeRow(String device, long time, int value) {
+    return "INSERT INTO "
+        + DATABASE
+        + ".redirect_probe(time,device,v) VALUES ("
+        + time
+        + ",'"
+        + device
+        + "',"
+        + value
+        + ")";
+  }
+
+  private static List<Row> probeRows(Connection connection) {
+    return Flux.from(
+            connection
+                .createStatement("SELECT time, device, v FROM " + DATABASE + ".redirect_probe")
+                .execute())
+        .flatMap(result -> result.map((row, metadata) -> row))
+        .collectList()
+        .block();
   }
 
   /** Creates the fixture through the first DataNode so both tests are order independent. */

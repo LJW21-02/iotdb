@@ -117,7 +117,11 @@ flushing past their deadline; a fast consumer can therefore see the timeout on t
   accounting, and one extra transition so Thrift can read a frame body from buffered plaintext). This
   is the main maintenance cost of the decision and the main argument for Netty if it grows.
 - Known capability differences stay visible: no cross statement transactions, no affected row counts,
-  no Snappy, no query redirection, no `DATE` parameters, server side cancellation not implemented.
+  no Snappy, no `DATE` parameters, server side cancellation not implemented. Redirection is followed
+  only for a request that has not been executed and only to the single node the server names, because
+  a request that spans two target nodes cannot be replayed safely; the server recommends a node today
+  for writes and for the fast last data query paths, while a regular query is executed by the node
+  that receives it.
 - Thrift's async client writes the frame size and the frame payload as two socket writes
   (`TAsyncMethodCall` states `WRITING_REQUEST_SIZE` and `WRITING_REQUEST`), so a request reaches the
   wire as two segments where a blocking client's two writes are coalesced into one. On a LAN this is
@@ -151,6 +155,8 @@ mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcSoakIT     -Diotdb.it.stallProx
 # the cleanup budget bounds close(); both cases need the stalling helper, which keeps the socket
 # open but silent, with -Diotdb.it.stallProxy=.../.r2dbc-validation/stall_proxy.py:
 mvn test -pl iotdb-client/r2dbc -Dtest='IoTDBR2dbcSoakIT#closingAConnectionWithASilentServerStaysWithinTheCleanupTimeout+abandoningAResultWithASilentServerDestroysTheConnection' ...
+# the redirect cases need a 1C3D cluster (.r2dbc-validation/Start-Cluster.ps1) and rtt_proxy.py:
+mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcClusterIT -Diotdb.it.cluster.ports=16667,16668,16669     -Diotdb.it.cluster.proxy=.../.r2dbc-validation/rtt_proxy.py ...
 # .r2dbc-validation/PageTimeoutProbe.java drives the page phase timeout A/B (slow consumer plus a
 # server query budget just above the first page); run it with the driver classes of the build under
 # test in front of the distribution lib/* of the matching server, not with locally resolved snapshots

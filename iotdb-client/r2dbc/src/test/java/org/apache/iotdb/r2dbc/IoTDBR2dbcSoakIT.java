@@ -67,6 +67,11 @@ public class IoTDBR2dbcSoakIT {
   private static final String DATABASE = "r2dbc_soak";
   private static final int ROWS = 300;
 
+  /** Far more rows than one server side page holds, for the abandoned result case. */
+  private static final int ABANDON_ROWS = 20_000;
+
+  private static final int ABANDON_BATCH = 1_000;
+
   @BeforeClass
   public static void requireServer() {
     Assume.assumeTrue(System.getProperty("iotdb.it.host") != null);
@@ -311,14 +316,45 @@ public class IoTDBR2dbcSoakIT {
     ConnectionFactory factory = factory(proxyPort, Duration.ofMinutes(10), Duration.ofSeconds(1));
     try {
       awaitPort(proxyPort);
+      String table = DATABASE + ".abandon_probe";
+      // Calibrate on the endpoint the helper forwards to: provisioning a device that this endpoint
+      // does not own would move the session to another DataNode and bypass the silent helper, which
+      // this case cannot observe. A single node endpoint owns its own writes.
+      ConnectionFactory local =
+          factory(proxyPort, Duration.ofMinutes(10), Duration.ofSeconds(1), 0);
+      try {
+        Connection calibration = Mono.from(local.create()).block();
+        try {
+          execute(calibration, "CREATE DATABASE IF NOT EXISTS " + DATABASE);
+          execute(
+              calibration,
+              "CREATE TABLE IF NOT EXISTS " + table + "(device STRING TAG, v INT32 FIELD)");
+          try {
+            execute(calibration, insertAbandonRow(table, 1));
+          } catch (RuntimeException notLocal) {
+            Assume.assumeTrue(
+                "this case needs an endpoint that owns the fixture, but it recommends another DataNode"
+                    + " for it: "
+                    + notLocal.getMessage(),
+                false);
+          }
+          provisionAbandonRows(calibration, table);
+        } finally {
+          Mono.from(calibration.close()).block();
+        }
+      } finally {
+        ((IoTDBR2dbcConnectionFactory) local).close();
+      }
+
       Connection connection = Mono.from(factory.create()).block();
       provision(connection);
-      Statement statement = connection.createStatement(selectAllText());
+      Statement statement = connection.createStatement("SELECT time, v FROM " + table);
       statement.fetchSize(1);
       // Demand one row only: the query is open on the server (a query id exists) but no fetch is in
       // flight, so cancelling afterwards releases the handle with a single request that the silent
       // server never answers.
       CountDownLatch firstRow = new CountDownLatch(1);
+      CountDownLatch completed = new CountDownLatch(1);
       BaseSubscriber<Row> rows =
           new BaseSubscriber<Row>() {
             @Override
@@ -330,6 +366,11 @@ public class IoTDBR2dbcSoakIT {
             protected void hookOnNext(Row row) {
               firstRow.countDown();
             }
+
+            @Override
+            protected void hookOnComplete() {
+              completed.countDown();
+            }
           };
       Flux.from(statement.execute())
           .flatMap(result -> result.map((row, metadata) -> row), 1, 1)
@@ -338,6 +379,9 @@ public class IoTDBR2dbcSoakIT {
         assertTrue(
             "the query must deliver a row before the server goes silent",
             firstRow.await(30, TimeUnit.SECONDS));
+        assertTrue(
+            "the fixture fits into one page, so there is nothing left to abandon",
+            completed.getCount() > 0);
         Files.createFile(stallFile);
         rows.cancel();
 
@@ -383,8 +427,13 @@ public class IoTDBR2dbcSoakIT {
 
   /**
    * Starts the silent but connected server helper; creating the flag file switches it to stalling.
+   * Skipped when the helper is not configured, so the cases that need it do not fail with a null
+   * path.
    */
   private static Process startStallProxy(Path stallFile, int proxyPort) throws IOException {
+    Assume.assumeTrue(
+        "set -Diotdb.it.stallProxy=<path to stall_proxy.py> to run it",
+        System.getProperty("iotdb.it.stallProxy") != null);
     return new ProcessBuilder(
             "python",
             Path.of(System.getProperty("iotdb.it.stallProxy")).toString(),
@@ -396,6 +445,25 @@ public class IoTDBR2dbcSoakIT {
             stallFile.toString())
         .redirectErrorStream(true)
         .start();
+  }
+
+  private static String insertAbandonRow(String table, int time) {
+    return "INSERT INTO " + table + "(time,device,v) VALUES (" + time + ",'abandon'," + time + ")";
+  }
+
+  /** Writes more rows than one page holds, so an abandoned result still has a live handle. */
+  private static void provisionAbandonRows(Connection connection, String table) {
+    for (int start = 1; start <= ABANDON_ROWS; start += ABANDON_BATCH) {
+      int end = Math.min(start + ABANDON_BATCH, ABANDON_ROWS);
+      StringBuilder insert = new StringBuilder("INSERT INTO " + table + "(time,device,v) VALUES ");
+      for (int row = start; row <= end; row++) {
+        if (row > start) {
+          insert.append(',');
+        }
+        insert.append('(').append(row).append(",'abandon',").append(row).append(')');
+      }
+      execute(connection, insert.toString());
+    }
   }
 
   /** Waits until the driver reports the connection as destroyed and returns the elapsed time. */
@@ -576,12 +644,21 @@ public class IoTDBR2dbcSoakIT {
    * measured time can only come from the cleanup budget.
    */
   private static ConnectionFactory factory(int port, Duration rpcTimeout, Duration cleanupTimeout) {
+    return factory(port, rpcTimeout, cleanupTimeout, -1);
+  }
+
+  /** A budget of {@code -1} keeps the driver default, {@code 0} refuses any recommendation. */
+  private static ConnectionFactory factory(
+      int port, Duration rpcTimeout, Duration cleanupTimeout, int maxRedirects) {
     ConnectionFactoryOptions.Builder builder =
         options()
             .option(ConnectionFactoryOptions.PORT, port)
             .option(IoTDBConnectionFactoryOptions.RPC_TIMEOUT, rpcTimeout);
     if (cleanupTimeout != null) {
       builder.option(IoTDBConnectionFactoryOptions.CLEANUP_TIMEOUT, cleanupTimeout);
+    }
+    if (maxRedirects >= 0) {
+      builder.option(IoTDBConnectionFactoryOptions.MAX_REDIRECTS, maxRedirects);
     }
     return ConnectionFactories.get(builder.build());
   }
