@@ -46,7 +46,7 @@ provided.
 | Blocking `Session` plus a bounded thread pool | Satisfies reactive behaviour but not non-blocking I/O; it also does not remove server side worker usage. Kept as the measurement baseline only. |
 | Thrift's `TNonblockingSSLSocket` | Its handshake busy waits on the shared selector thread, and its `read` returns the requested length instead of the bytes read, which does not match what the async client expects. Verified from the 0.24.0 bytecode in the design investigation. |
 | Netty + Thrift codecs | Follows the design document's preference and gives a mature TLS stack, but the generated async client is bound to `TNonblockingTransport` + `TAsyncClientManager`; a Netty transport means re-implementing serialization and response dispatch per RPC method (about 1–2 person weeks) and replacing a transport that is already verified end to end. Revisit when the trigger below fires. |
-| Following server redirects without a policy | Unbounded re-sending can duplicate writes and loop between nodes. The driver follows a recommendation only for a request that has not been executed, at most `iotdb.maxRedirects` times, re-establishes the session on the target node, and rejects a response that recommends several different nodes for one request. Verified against a 1C3D cluster. |
+| Replaying execution RPCs from routing metadata | A recommendation can accompany a completed write, so replaying it can apply the write twice or report an error after success. Execution RPCs are never replayed based on response metadata: proven successful shapes are accepted, while a bare ambiguous top-level recommendation is surfaced as an error without retry. The legacy `iotdb.maxRedirects` option is retained for configuration compatibility but currently has no effect. Local framed-Thrift tests cover these response shapes; the cluster integration test checks successful visibility with a zero budget. |
 
 ## Evidence
 
@@ -109,19 +109,18 @@ flushing past their deadline; a fast consumer can therefore see the timeout on t
 
 - The transport is reusable for plaintext and TLS with the same async client, request serialization
   and cleanup path.
-- Redirection replaces the session of a connection (new socket, `openSession`, statement id) and is
-  bounded per statement. A prepared execution is prepared again on the target node, because the
-  server side handle belongs to the session that created it; the handle of an attempt that never
-  reached the caller is released, so a followed redirection leaves no registered statement behind.
+- Execution response recommendations do not replace the session or trigger another execution. The
+  driver returns only response shapes proven to represent a completed success; a bare ambiguous
+  recommendation is surfaced as an error, without retrying the statement.
 - `TlsNonblockingSocket` is a hand written state machine (handshake, record layer, partial write
   accounting, and one extra transition so Thrift can read a frame body from buffered plaintext). This
   is the main maintenance cost of the decision and the main argument for Netty if it grows.
 - Known capability differences stay visible: no cross statement transactions, no affected row counts,
-  no Snappy, no `DATE` parameters, server side cancellation not implemented. Redirection is followed
-  only for a request that has not been executed and only to the single node the server names, because
-  a request that spans two target nodes cannot be replayed safely; the server recommends a node today
-  for writes and for the fast last data query paths, while a regular query is executed by the node
-  that receives it.
+  no Snappy, no `DATE` parameters, and server side cancellation is not implemented. A response that
+  merely names one or more target nodes does not prove that the operation was not executed, so the
+  driver does not replay it. This applies to ordinary and prepared execution responses; a bare
+  top-level recommendation without a proven successful result remains an error. The legacy
+  `iotdb.maxRedirects` option currently has no effect.
 - Thrift's async client writes the frame size and the frame payload as two socket writes
   (`TAsyncMethodCall` states `WRITING_REQUEST_SIZE` and `WRITING_REQUEST`), so a request reaches the
   wire as two segments where a blocking client's two writes are coalesced into one. On a LAN this is

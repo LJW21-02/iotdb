@@ -157,18 +157,9 @@ public class IoTDBR2dbcClusterIT {
     }
   }
 
-  /**
-   * A write that lands on a DataNode that does not own the region is answered with a recommendation
-   * instead of a failure. With no budget left the driver must report the exhausted budget rather
-   * than write somewhere else; with a budget it must re-establish the session on the recommended
-   * node, and the row must then be visible from another node.
-   *
-   * <p>Which DataNode owns a device is decided by the cluster, so the test calibrates itself: it
-   * writes a distinct device from every DataNode with {@code iotdb.maxRedirects=0} and requires at
-   * least one refusal and one acceptance, then repeats a refused write with the default budget.
-   */
+  /** A successful write recommendation must not be mistaken for a refused request. */
   @Test
-  public void aWriteOnANonOwningDataNodeIsRedirectedWithinTheBudget() {
+  public void writesOnEveryDataNodeCompleteWithNoRedirectBudget() {
     List<Integer> ports = clusterPorts();
     ConnectionFactory provisioner = factory(ports.get(0));
     try {
@@ -187,23 +178,14 @@ public class IoTDBR2dbcClusterIT {
       ((IoTDBR2dbcConnectionFactory) provisioner).close();
     }
 
-    // Calibration: the same device is written from every DataNode, so exactly one DataNode owns the
-    // region and only that one may accept a write while the budget refuses every recommendation.
-    List<Integer> refused = new ArrayList<>();
+    // The owning DataNode is cluster-dependent. Every successful execution must still be reported
+    // as successful, even if its response includes a routing recommendation and the budget is 0.
     for (int index = 0; index < ports.size(); index++) {
       ConnectionFactory factory = factory(ports.get(index), 0);
       try {
         Connection connection = Mono.from(factory.create()).block();
         try {
           execute(connection, insertProbeRow(PROBE_DEVICE, 1_000 + index, 10 + index));
-        } catch (RuntimeException failure) {
-          assertTrue(
-              "a refused redirect must report the exhausted budget, was " + failure,
-              failure.getMessage() != null
-                  && failure
-                      .getMessage()
-                      .contains("The redirection budget of 0 hops is exhausted"));
-          refused.add(ports.get(index));
         } finally {
           Mono.from(connection.close()).block();
         }
@@ -211,38 +193,23 @@ public class IoTDBR2dbcClusterIT {
         ((IoTDBR2dbcConnectionFactory) factory).close();
       }
     }
-    assertTrue(
-        "no DataNode refused the write: no recommendation was exercised", !refused.isEmpty());
-    assertTrue(
-        "every DataNode refused the write: the fixture is unusable", refused.size() < ports.size());
 
-    // The default budget must follow the recommendation for the refused write.
-    int writerPort = refused.get(0);
-    ConnectionFactory writer = factory(writerPort);
-    try {
-      Connection connection = Mono.from(writer.create()).block();
-      try {
-        execute(connection, insertProbeRow(PROBE_DEVICE, 2_000, 77));
-      } finally {
-        Mono.from(connection.close()).block();
-      }
-    } finally {
-      ((IoTDBR2dbcConnectionFactory) writer).close();
-    }
-
-    int readerPort = ports.get(0) == writerPort ? ports.get(1) : ports.get(0);
+    int readerPort = ports.get(0);
     ConnectionFactory reader = factory(readerPort);
     try {
       Connection connection = Mono.from(reader.create()).block();
       try {
-        boolean found = false;
+        List<Integer> visibleValues = new ArrayList<>();
         for (Row row : probeRows(connection)) {
-          if (PROBE_DEVICE.equals(row.get("device", String.class))
-              && Integer.valueOf(77).equals(row.get("v", Integer.class))) {
-            found = true;
+          if (PROBE_DEVICE.equals(row.get("device", String.class))) {
+            visibleValues.add(row.get("v", Integer.class));
           }
         }
-        assertTrue("the redirected write is not visible from port " + readerPort, found);
+        for (int index = 0; index < ports.size(); index++) {
+          assertTrue(
+              "write from port " + ports.get(index) + " is not visible from port " + readerPort,
+              visibleValues.contains(10 + index));
+        }
       } finally {
         Mono.from(connection.close()).block();
       }

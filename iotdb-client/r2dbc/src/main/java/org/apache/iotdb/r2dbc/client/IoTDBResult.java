@@ -27,6 +27,7 @@ import io.r2dbc.spi.Row;
 import io.r2dbc.spi.RowMetadata;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
@@ -46,27 +47,61 @@ public final class IoTDBResult implements Result {
   private final Publisher<Row> rows;
   private final Predicate<Segment> segmentFilter;
   private final AtomicBoolean consumed;
+  private final Mono<Void> consumption;
+  private final Runnable discardAction;
 
   private IoTDBResult(
-      Publisher<Row> rows, Predicate<Segment> segmentFilter, AtomicBoolean consumed) {
+      Publisher<Row> rows,
+      Predicate<Segment> segmentFilter,
+      AtomicBoolean consumed,
+      Mono<Void> consumption,
+      Runnable discardAction) {
     this.rows = rows;
     this.segmentFilter = segmentFilter;
     this.consumed = consumed;
+    this.consumption = consumption;
+    this.discardAction = discardAction;
   }
 
   public static IoTDBResult of(IoTDBQueryCursor cursor) {
-    return new IoTDBResult(cursor, null, new AtomicBoolean());
+    return new IoTDBResult(
+        cursor, null, new AtomicBoolean(), cursor.releaseCompletion(), cursor::close);
   }
 
   /** Result of a statement that produced no row set, for example an insert or a DDL statement. */
   public static IoTDBResult empty() {
-    return new IoTDBResult(Flux.empty(), null, new AtomicBoolean());
+    return new IoTDBResult(Flux.empty(), null, new AtomicBoolean(), Mono.empty(), () -> {});
+  }
+
+  static IoTDBResult of(Publisher<Row> rows, Mono<Void> consumption, Runnable discardAction) {
+    return new IoTDBResult(rows, null, new AtomicBoolean(), consumption, discardAction);
+  }
+
+  /**
+   * Completes once this result has been consumed and any server-side cursor has been released.
+   *
+   * <p>This is used by a statement's internal result sequence to avoid starting the next execution
+   * while the current query still owns the connection. It is deliberately independent of the
+   * result's consumption flag because the cursor may need asynchronous cleanup after the row
+   * publisher terminates.
+   */
+  Mono<Void> awaitConsumption() {
+    return consumption.doOnCancel(discardAction);
+  }
+
+  Flux<IoTDBResult> followedBy(Publisher<IoTDBResult> next) {
+    return Flux.concat(Mono.just(this), awaitConsumption().thenMany(next))
+        .doOnDiscard(IoTDBResult.class, IoTDBResult::discard);
+  }
+
+  void discard() {
+    discardAction.run();
   }
 
   @Override
   public Publisher<Long> getRowsUpdated() {
     markConsumed();
-    return Flux.<Long>empty().doOnSubscribe(subscription -> discardRows());
+    return Flux.<Long>empty().doOnSubscribe(subscription -> discard());
   }
 
   @Override
@@ -82,7 +117,7 @@ public final class IoTDBResult implements Result {
         segmentFilter == null
             ? filter
             : segment -> segmentFilter.test(segment) && filter.test(segment);
-    return new IoTDBResult(rows, combined, consumed);
+    return new IoTDBResult(rows, combined, consumed, consumption, discardAction);
   }
 
   @Override
@@ -112,12 +147,6 @@ public final class IoTDBResult implements Result {
     @Override
     public Row row() {
       return row;
-    }
-  }
-
-  private void discardRows() {
-    if (rows instanceof IoTDBQueryCursor) {
-      ((IoTDBQueryCursor) rows).close();
     }
   }
 

@@ -29,6 +29,7 @@ import javax.net.ssl.SSLEngineResult.HandshakeStatus;
 import javax.net.ssl.SSLEngineResult.Status;
 import javax.net.ssl.SSLException;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
@@ -71,6 +72,7 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
 
   private boolean connected;
   private boolean handshakeComplete;
+  private boolean peerClosed;
   private SelectionKey selectionKey;
   private int encryptedButUnacknowledged;
 
@@ -130,14 +132,24 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
       HandshakeStatus status = engine.getHandshakeStatus();
       switch (status) {
         case NEED_UNWRAP:
-          if (!netIn.hasRemaining() && readCiphertext() <= 0) {
-            interestOps(SelectionKey.OP_READ);
-            return;
+          if (!netIn.hasRemaining()) {
+            if (readCiphertext() == 0) {
+              interestOps(SelectionKey.OP_READ);
+              return;
+            }
           }
+          appIn.clear();
           SSLEngineResult unwrap = engine.unwrap(netIn, appIn);
+          appIn.flip();
           if (unwrap.getStatus() == Status.BUFFER_UNDERFLOW) {
-            interestOps(SelectionKey.OP_READ);
-            return;
+            // Keep the partial TLS record and ask the channel for the rest. The previous
+            // implementation returned here without compacting/refilling netIn, so a TCP
+            // fragment could leave the handshake permanently waiting on already-read bytes.
+            if (readCiphertext() == 0) {
+              interestOps(SelectionKey.OP_READ);
+              return;
+            }
+            continue;
           }
           requireOk(unwrap, "handshake");
           break;
@@ -232,6 +244,8 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
     if (!handshakeComplete) {
       try {
         driveHandshake();
+      } catch (EndOfStreamException e) {
+        throw endOfFile(e);
       } catch (IOException e) {
         throw new TTransportException(TTransportException.UNKNOWN, e.getMessage(), e);
       }
@@ -262,23 +276,36 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
   private void fillPlaintext() throws TTransportException {
     while (!appIn.hasRemaining()) {
       try {
-        if (!netIn.hasRemaining() && readCiphertext() <= 0) {
-          return;
+        if (!netIn.hasRemaining()) {
+          if (readCiphertext() == 0) {
+            return;
+          }
         }
         appIn.clear();
         SSLEngineResult result = engine.unwrap(netIn, appIn);
         appIn.flip();
         requireOk(result, "unwrap");
         if (result.getStatus() == Status.BUFFER_UNDERFLOW) {
-          // The record is incomplete; compact and wait for the rest.
-          return;
-        }
-        if (!appIn.hasRemaining() && !netIn.hasRemaining()) {
+          // Preserve the partial record, then try to append the next TCP fragment before
+          // returning to the selector.
+          if (readCiphertext() == 0) {
+            return;
+          }
           continue;
         }
-        return;
+        if (appIn.hasRemaining()) {
+          return;
+        }
+        if (result.bytesConsumed() == 0 && result.bytesProduced() == 0) {
+          interestOps(SelectionKey.OP_READ);
+          return;
+        }
+        // Empty TLS control records may leave more ciphertext buffered. Keep unwrapping rather
+        // than returning 0 while the kernel has no new readability event to trigger us.
       } catch (SSLException e) {
         throw new TTransportException(TTransportException.CORRUPTED_DATA, e.getMessage(), e);
+      } catch (EndOfStreamException e) {
+        throw endOfFile(e);
       } catch (IOException e) {
         throw new TTransportException(TTransportException.UNKNOWN, e.getMessage(), e);
       }
@@ -287,9 +314,22 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
 
   /** Reads from the channel into the ciphertext buffer; returns the channel read count. */
   private int readCiphertext() throws IOException {
+    if (peerClosed) {
+      throw new EndOfStreamException();
+    }
     netIn.compact();
     int read = socketChannel.read(netIn);
     netIn.flip();
+    if (read < 0) {
+      peerClosed = true;
+      interestOps(0);
+      try {
+        socketChannel.close();
+      } catch (IOException ignored) {
+        // The peer has already closed its side; there is nothing left to drain.
+      }
+      throw new EndOfStreamException();
+    }
     return read;
   }
 
@@ -300,6 +340,8 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
       // handshake tell the selector what to wait for.
       try {
         driveHandshake();
+      } catch (EndOfStreamException e) {
+        throw endOfFile(e);
       } catch (IOException e) {
         throw new TTransportException(TTransportException.UNKNOWN, e.getMessage(), e);
       }
@@ -434,5 +476,13 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
     destination.put(view);
     source.position(source.position() + length);
     return length;
+  }
+
+  private static TTransportException endOfFile(EndOfStreamException cause) {
+    return new TTransportException(TTransportException.END_OF_FILE, cause);
+  }
+
+  private static final class EndOfStreamException extends EOFException {
+    private static final long serialVersionUID = 1L;
   }
 }

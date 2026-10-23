@@ -135,12 +135,17 @@ public final class IoTDBStatement implements Statement {
           R2dbcMessages
               .EXCEPTION_PARAMETERS_CANNOT_BE_BOUND_TO_A_STATEMENT_THAT_CONTAINS_SEVERAL_SQL_STATEMENTS_89D234C0);
     }
-    // A statement with several SQL texts produces one result per text, in order.
+    // A statement with several SQL texts produces one result per text, in order. Keep the
+    // binding-set/SQL product lazy so large batches do not allocate a second full execution list.
     return Flux.fromIterable(executionParameters)
         .concatMap(
             bindings ->
                 Flux.fromIterable(statements)
-                    .concatMap(statement -> connection.execute(statement, bindings, fetchSize)));
+                    .concatMap(
+                        statement ->
+                            connection
+                                .execute(statement, bindings, fetchSize)
+                                .flatMapMany(result -> result.followedBy(Flux.empty()))));
   }
 
   private List<List<ParameterBinding>> snapshotParameters() {

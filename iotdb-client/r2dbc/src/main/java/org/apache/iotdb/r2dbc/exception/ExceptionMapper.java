@@ -58,13 +58,50 @@ public final class ExceptionMapper {
       return;
     }
     if (code == TSStatusCode.REDIRECTION_RECOMMEND.getStatusCode()) {
-      // Both execution paths follow a redirection before they verify, so a recommendation that
-      // arrives here named no node to follow.
       throw new IoTDBR2dbcException(
           R2dbcMessages
               .EXCEPTION_THE_SERVER_RECOMMENDED_A_REDIRECTION_WITHOUT_NAMING_A_TARGET_NODE_0F043C12);
     }
     throw mapStatus(status, sql);
+  }
+
+  /**
+   * Verifies an execution response, accepting only recommendation shapes that prove execution
+   * completed successfully. A bare top-level recommendation may describe a request that was never
+   * executed, so it remains an error and is never replayed by the driver.
+   */
+  public static void verifyExecutionSuccess(TSStatus status, String sql) {
+    if (status == null) {
+      verifySuccess(null, sql);
+    }
+    if (status.getCode() == TSStatusCode.SUCCESS_STATUS.getStatusCode()) {
+      return;
+    }
+    if (status.getCode() == TSStatusCode.REDIRECTION_RECOMMEND.getStatusCode()
+        && !status.isSetRedirectNode()
+        && status.isSetSubStatus()
+        && status.getSubStatus() != null
+        && !status.getSubStatus().isEmpty()) {
+      boolean hasRecommendedTarget = false;
+      for (TSStatus subStatus : status.getSubStatus()) {
+        if (subStatus == null) {
+          verifySuccess(null, sql);
+        }
+        if (subStatus.getCode() != TSStatusCode.SUCCESS_STATUS.getStatusCode()) {
+          verifySuccess(subStatus, sql);
+          throw mapStatus(subStatus, sql);
+        }
+        hasRecommendedTarget |= subStatus.isSetRedirectNode();
+      }
+      if (hasRecommendedTarget) {
+        return;
+      }
+    }
+    if (status.getCode() == TSStatusCode.REDIRECTION_RECOMMEND.getStatusCode()
+        && status.isSetRedirectNode()) {
+      throw mapStatus(status, sql);
+    }
+    verifySuccess(status, sql);
   }
 
   /** Maps a failing server status onto the closest standard R2DBC exception type. */

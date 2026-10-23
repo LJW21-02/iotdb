@@ -19,6 +19,7 @@
 
 package org.apache.iotdb.r2dbc.exception;
 
+import org.apache.iotdb.common.rpc.thrift.TEndPoint;
 import org.apache.iotdb.common.rpc.thrift.TSStatus;
 import org.apache.iotdb.rpc.TSStatusCode;
 
@@ -37,6 +38,7 @@ import java.util.concurrent.TimeoutException;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 /** Timeout classification and status mapping, which decide the exception type a caller catches. */
@@ -76,6 +78,92 @@ public class ExceptionMapperTest {
     R2dbcException mapped = ExceptionMapper.mapStatus(status, "select 1");
     assertEquals(TSStatusCode.INTERNAL_SERVER_ERROR.getStatusCode(), mapped.getErrorCode());
     assertTrue(mapped.getMessage().contains("boom"));
+  }
+
+  @Test
+  public void aRedirectionRecommendationIsACompletedExecutionStatus() {
+    TSStatus recommendation =
+        new TSStatus(TSStatusCode.REDIRECTION_RECOMMEND.getStatusCode())
+            .setSubStatus(
+                java.util.List.of(
+                    new TSStatus(TSStatusCode.SUCCESS_STATUS.getStatusCode())
+                        .setRedirectNode(new TEndPoint("127.0.0.1", 6668))));
+
+    ExceptionMapper.verifyExecutionSuccess(recommendation, "insert into t values (1)");
+  }
+
+  @Test
+  public void aRedirectionRecommendationWithSeveralTargetsIsStillSuccessful() {
+    TSStatus recommendation =
+        new TSStatus(TSStatusCode.REDIRECTION_RECOMMEND.getStatusCode())
+            .setSubStatus(
+                java.util.List.of(
+                    new TSStatus(TSStatusCode.SUCCESS_STATUS.getStatusCode())
+                        .setRedirectNode(new TEndPoint("127.0.0.1", 6668)),
+                    new TSStatus(TSStatusCode.SUCCESS_STATUS.getStatusCode())
+                        .setRedirectNode(new TEndPoint("127.0.0.1", 6669))));
+
+    ExceptionMapper.verifyExecutionSuccess(recommendation, "insert into t values (1)");
+  }
+
+  @Test
+  public void aBareRecommendationIsNotAcceptedAsACompletedExecution() {
+    TSStatus recommendation =
+        new TSStatus(TSStatusCode.REDIRECTION_RECOMMEND.getStatusCode())
+            .setRedirectNode(new TEndPoint("127.0.0.1", 6668));
+
+    R2dbcException failure =
+        assertThrows(
+            R2dbcException.class,
+            () ->
+                ExceptionMapper.verifyExecutionSuccess(recommendation, "insert into t values (1)"));
+    assertEquals(TSStatusCode.REDIRECTION_RECOMMEND.getStatusCode(), failure.getErrorCode());
+  }
+
+  @Test
+  public void aRecommendationWithAFailingChildKeepsTheActualFailure() {
+    TSStatus recommendation =
+        new TSStatus(TSStatusCode.REDIRECTION_RECOMMEND.getStatusCode())
+            .setSubStatus(
+                java.util.List.of(
+                    new TSStatus(TSStatusCode.SUCCESS_STATUS.getStatusCode())
+                        .setRedirectNode(new TEndPoint("127.0.0.1", 6668)),
+                    new TSStatus(TSStatusCode.SEMANTIC_ERROR.getStatusCode())));
+
+    assertThrows(
+        R2dbcBadGrammarException.class,
+        () -> ExceptionMapper.verifyExecutionSuccess(recommendation, "insert into t values (1)"));
+  }
+
+  @Test
+  public void aRecommendationRequiresSuccessfulChildrenAndARoutingTarget() {
+    TSStatus recommendation =
+        new TSStatus(TSStatusCode.REDIRECTION_RECOMMEND.getStatusCode())
+            .setSubStatus(
+                java.util.List.of(new TSStatus(TSStatusCode.SUCCESS_STATUS.getStatusCode())));
+
+    assertThrows(
+        IoTDBR2dbcException.class,
+        () -> ExceptionMapper.verifyExecutionSuccess(recommendation, "insert into t values (1)"));
+
+    recommendation.setSubStatus(
+        java.util.List.of(
+            new TSStatus(TSStatusCode.MULTIPLE_ERROR.getStatusCode())
+                .setRedirectNode(new TEndPoint("127.0.0.1", 6668))));
+    assertThrows(
+        IoTDBR2dbcException.class,
+        () -> ExceptionMapper.verifyExecutionSuccess(recommendation, "insert into t values (1)"));
+  }
+
+  @Test
+  public void aRecommendationWithoutTargetStillFailsForOtherRpcStatuses() {
+    TSStatus recommendation = new TSStatus(TSStatusCode.REDIRECTION_RECOMMEND.getStatusCode());
+
+    R2dbcException failure =
+        assertThrows(
+            R2dbcException.class, () -> ExceptionMapper.verifySuccess(recommendation, null));
+
+    assertTrue(failure.getMessage().contains("without naming a target node"));
   }
 
   @Test

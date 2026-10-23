@@ -19,7 +19,6 @@
 
 package org.apache.iotdb.r2dbc.client;
 
-import org.apache.iotdb.common.rpc.thrift.TEndPoint;
 import org.apache.iotdb.common.rpc.thrift.TSStatus;
 import org.apache.iotdb.r2dbc.IoTDBConnectionConfiguration;
 import org.apache.iotdb.r2dbc.R2dbcMessages;
@@ -63,11 +62,9 @@ import reactor.core.scheduler.Scheduler;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -269,9 +266,7 @@ public final class IoTDBConnection implements Connection, Lifecycle {
                 executeStatement(sql, effectiveFetchSize)
                     .map(response -> new Execution(response, null));
           } else if (canUsePreparedStatement(sql, wireParameters)) {
-            execution =
-                executePreparedStatement(
-                    sql, wireParameters, effectiveFetchSize, configuration.maxRedirects());
+            execution = executePreparedStatement(sql, wireParameters, effectiveFetchSize);
           } else {
             // The tree dialect has no server side prepare; literals are the only verified path.
             execution =
@@ -279,6 +274,7 @@ public final class IoTDBConnection implements Connection, Lifecycle {
                     .map(response -> new Execution(response, null));
           }
           Duration timeout = statementTimeout;
+          AtomicBoolean resultDelivered = new AtomicBoolean();
           Mono<IoTDBResult> result =
               execution.map(
                   completed ->
@@ -286,32 +282,44 @@ public final class IoTDBConnection implements Connection, Lifecycle {
           if (!timeout.isZero()) {
             result = result.timeout(timeout);
           }
-          return result.onErrorResume(
-              error -> {
-                statementActive.set(false);
-                if (error instanceof R2dbcException) {
-                  return Mono.error(error);
-                }
-                if (error instanceof TimeoutException) {
-                  abort();
-                  return Mono.error(
-                      new R2dbcTimeoutException(
-                          String.format(
-                              R2dbcMessages.EXCEPTION_THE_STATEMENT_TIMED_OUT_AFTER_ARG_37D4D030,
-                              timeout)));
-                }
-                // The protocol state is unknown after a transport failure.
-                abort();
-                String message =
-                    ExceptionMapper.isTimeout(error)
-                        ? String.format(
-                            R2dbcMessages.EXCEPTION_THE_RPC_TIMED_OUT_AFTER_ARG_6B50D3BF,
-                            configuration.rpcTimeout())
-                        : String.format(
-                            R2dbcMessages.EXCEPTION_STATEMENT_EXECUTION_FAILED_ARG_D1EB77EA,
-                            error.getMessage());
-                return Mono.error(ExceptionMapper.mapTransportFailure(message, error));
-              });
+          return result
+              .doOnNext(ignored -> resultDelivered.set(true))
+              // Cancellation before the first response leaves the RPC outcome unknown. The
+              // transport must be destroyed rather than returned to a pool or used again.
+              .doOnCancel(
+                  () -> {
+                    if (!resultDelivered.get()) {
+                      statementActive.set(false);
+                      abort();
+                    }
+                  })
+              .onErrorResume(
+                  error -> {
+                    statementActive.set(false);
+                    if (error instanceof R2dbcException) {
+                      return Mono.error(error);
+                    }
+                    if (error instanceof TimeoutException) {
+                      abort();
+                      return Mono.error(
+                          new R2dbcTimeoutException(
+                              String.format(
+                                  R2dbcMessages
+                                      .EXCEPTION_THE_STATEMENT_TIMED_OUT_AFTER_ARG_37D4D030,
+                                  timeout)));
+                    }
+                    // The protocol state is unknown after a transport failure.
+                    abort();
+                    String message =
+                        ExceptionMapper.isTimeout(error)
+                            ? String.format(
+                                R2dbcMessages.EXCEPTION_THE_RPC_TIMED_OUT_AFTER_ARG_6B50D3BF,
+                                configuration.rpcTimeout())
+                            : String.format(
+                                R2dbcMessages.EXCEPTION_STATEMENT_EXECUTION_FAILED_ARG_D1EB77EA,
+                                error.getMessage());
+                    return Mono.error(ExceptionMapper.mapTransportFailure(message, error));
+                  });
         });
   }
 
@@ -338,13 +346,10 @@ public final class IoTDBConnection implements Connection, Lifecycle {
   }
 
   private Mono<TSExecuteStatementResp> executeStatement(String sql, int fetchSize) {
-    // A DataNode that does not host the data recommends another node; that recommendation arrives
-    // before execution, so the request may be re-sent there under a bounded budget.
-    return followRedirects(
-            client -> client.executeStatement(buildExecuteRequest(sql, fetchSize)),
-            TSExecuteStatementResp::getStatus,
-            configuration.maxRedirects())
-        .doOnNext(response -> ExceptionMapper.verifySuccess(response.getStatus(), sql));
+    // Execution responses may carry routing recommendations after the operation has succeeded.
+    // Keep the response and never replay the statement based on that advisory metadata.
+    return call(client -> client.executeStatement(buildExecuteRequest(sql, fetchSize)))
+        .doOnNext(response -> ExceptionMapper.verifyExecutionSuccess(response.getStatus(), sql));
   }
 
   private TSExecuteStatementReq buildExecuteRequest(String sql, int fetchSize) {
@@ -359,107 +364,15 @@ public final class IoTDBConnection implements Connection, Lifecycle {
     return request;
   }
 
-  /** Follows server recommended redirections for a request that has not been executed yet. */
-  private <T> Mono<T> followRedirects(
-      Function<IoTDBAsyncClient, CompletableFuture<T>> rpc,
-      Function<T, TSStatus> statusOf,
-      int budget) {
-    return Mono.defer(
-        () ->
-            call(rpc)
-                .flatMap(
-                    response -> {
-                      TSStatus status = statusOf.apply(response);
-                      TEndPoint target = redirectTarget(status);
-                      if (target == null) {
-                        if (status != null && status.isSetSubStatus()) {
-                          // Several different nodes are recommended for one request: re-sending the
-                          // whole request to one of them could apply part of it twice.
-                          return Mono.error(
-                              new IoTDBR2dbcException(
-                                  R2dbcMessages
-                                      .EXCEPTION_A_PARTIALLY_REDIRECTED_MULTI_DEVICE_RESPONSE_CANNOT_BE_REPLAYED_SAFELY_162D6946));
-                        }
-                        return Mono.just(response);
-                      }
-                      if (budget <= 0) {
-                        return Mono.error(
-                            new IoTDBR2dbcException(
-                                String.format(
-                                    R2dbcMessages
-                                        .EXCEPTION_THE_REDIRECTION_BUDGET_OF_ARG_HOPS_IS_EXHAUSTED_344A9A03,
-                                    configuration.maxRedirects())));
-                      }
-                      return switchSession(target)
-                          .then(Mono.defer(() -> followRedirects(rpc, statusOf, budget - 1)));
-                    }));
-  }
-
-  /**
-   * Returns the node a request should be re-sent to.
-   *
-   * <p>Queries carry the recommended node in the status itself; relational writes carry one entry
-   * per device in {@code subStatus}, and only a single distinct target can be followed without
-   * splitting the write.
-   */
-  private static TEndPoint redirectTarget(TSStatus status) {
-    if (status == null) {
-      return null;
-    }
-    if (status.isSetRedirectNode()) {
-      return status.getRedirectNode();
-    }
-    if (!status.isSetSubStatus()) {
-      return null;
-    }
-    Set<TEndPoint> targets = new LinkedHashSet<>();
-    for (TSStatus subStatus : status.getSubStatus()) {
-      if (subStatus != null && subStatus.isSetRedirectNode()) {
-        targets.add(subStatus.getRedirectNode());
-      }
-    }
-    return targets.size() == 1 ? targets.iterator().next() : null;
-  }
-
-  /** Replaces the session with one on the recommended node; the previous socket is closed. */
-  private Mono<Void> switchSession(TEndPoint endpoint) {
-    return Mono.defer(
-        () -> {
-          if (activeCursor != null) {
-            return Mono.error(stillHasActiveResult());
-          }
-          IoTDBAsyncClient previous = client;
-          IoTDBAsyncClient replacement;
-          try {
-            replacement =
-                createClient(configuration, endpoint.getIp(), endpoint.getPort(), manager);
-          } catch (RuntimeException e) {
-            return Mono.error(e);
-          }
-          return Mono.fromCompletionStage(() -> handshake(configuration, replacement))
-              .timeout(configuration.connectTimeout())
-              .doOnNext(
-                  handshake -> {
-                    client = replacement;
-                    sessionId = handshake.sessionId;
-                    statementId = handshake.statementId;
-                    timeFactor = handshake.timeFactor;
-                    serverVersion = handshake.serverVersion;
-                  })
-              .doOnError(error -> replacement.close())
-              .then(Mono.fromRunnable(previous::close));
-        });
-  }
-
   /**
    * Prepares and executes one bound statement.
    *
-   * <p>A redirect is followed by preparing again on the new node, because the server side handle
-   * lives on the session that created it; the returned statement name is the handle of the last
-   * attempt, which is the one the cursor releases.
+   * <p>The execution response can include a routing recommendation after successful execution.
+   * Prepared statements must not be replayed based on that metadata; the returned handle belongs to
+   * this session and is the one the cursor releases.
    */
   private Mono<Execution> executePreparedStatement(
-      String sql, List<ParameterBinding> parameters, int fetchSize, int budget) {
+      String sql, List<ParameterBinding> parameters, int fetchSize) {
     return Mono.defer(
         () -> {
           String statementName = preparedName();
@@ -476,10 +389,7 @@ public final class IoTDBConnection implements Connection, Lifecycle {
               // A statement that failed before it reached the caller keeps no handle behind.
               .onErrorResume(
                   error -> discardPreparedStatement(statementName).then(Mono.error(error)))
-              .flatMap(
-                  response ->
-                      completeExecution(
-                          response, statementName, sql, parameters, fetchSize, budget));
+              .map(response -> new Execution(response, statementName));
         });
   }
 
@@ -504,48 +414,9 @@ public final class IoTDBConnection implements Connection, Lifecycle {
         .then();
   }
 
-  /**
-   * Verifies an execution response that is not a redirection recommendation.
-   *
-   * <p>A partially redirected response, in which the server named several different nodes, is
-   * rejected because re-sending the whole request to one of them could apply part of it twice.
-   */
+  /** Verifies an execution response; successful routing recommendations are advisory metadata. */
   private static void verifyExecutionStatus(TSStatus status, String sql) {
-    if (status != null && status.isSetSubStatus() && !status.isSetRedirectNode()) {
-      throw new IoTDBR2dbcException(
-          R2dbcMessages
-              .EXCEPTION_A_PARTIALLY_REDIRECTED_MULTI_DEVICE_RESPONSE_CANNOT_BE_REPLAYED_SAFELY_162D6946);
-    }
-    if (redirectTarget(status) == null) {
-      ExceptionMapper.verifySuccess(status, sql);
-    }
-  }
-
-  private Mono<Execution> completeExecution(
-      TSExecuteStatementResp response,
-      String statementName,
-      String sql,
-      List<ParameterBinding> parameters,
-      int fetchSize,
-      int budget) {
-    TEndPoint target = redirectTarget(response.getStatus());
-    if (target == null) {
-      return Mono.just(new Execution(response, statementName));
-    }
-    if (budget <= 0) {
-      return discardPreparedStatement(statementName)
-          .then(
-              Mono.error(
-                  new IoTDBR2dbcException(
-                      String.format(
-                          R2dbcMessages
-                              .EXCEPTION_THE_REDIRECTION_BUDGET_OF_ARG_HOPS_IS_EXHAUSTED_344A9A03,
-                          configuration.maxRedirects()))));
-    }
-    // The handle belongs to the session that created it, so the statement is prepared again on
-    // the recommended node.
-    return switchSession(target)
-        .then(Mono.defer(() -> executePreparedStatement(sql, parameters, fetchSize, budget - 1)));
+    ExceptionMapper.verifyExecutionSuccess(status, sql);
   }
 
   private TSExecutePreparedReq buildExecutePreparedRequest(

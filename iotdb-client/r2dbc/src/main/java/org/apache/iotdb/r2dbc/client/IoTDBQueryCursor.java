@@ -32,12 +32,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 import java.nio.ByteBuffer;
 import java.time.ZoneId;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -62,6 +64,7 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
   private final int timeFactor;
   private final Scheduler scheduler;
   private final AtomicBoolean subscribed = new AtomicBoolean();
+  private final CompletableFuture<Void> releaseCompletion = new CompletableFuture<>();
 
   private final Deque<ByteBuffer> pages = new ArrayDeque<>();
   private TsBlock block;
@@ -111,6 +114,10 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
       ZoneId zoneId) {
     return new IoTDBQueryCursor(
         connection, sql, response, fetchSize, preparedStatementName, scheduler, timeFactor, zoneId);
+  }
+
+  Mono<Void> releaseCompletion() {
+    return Mono.fromFuture(releaseCompletion, true);
   }
 
   @Override
@@ -285,6 +292,7 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
     }
     connection
         .releaseQuery(queryId, preparedStatementName)
+        .doFinally(signal -> releaseCompletion.complete(null))
         .subscribe(
             ignored -> {},
             error ->

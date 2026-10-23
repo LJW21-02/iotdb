@@ -63,6 +63,10 @@ public final class IoTDBBatch implements Batch {
   @Override
   public Publisher<? extends Result> execute() {
     return Flux.fromIterable(statements)
-        .concatMap(statement -> connection.execute(statement, List.of(), 0));
+        .concatMap(
+            statement ->
+                connection
+                    .execute(statement, List.of(), 0)
+                    .flatMapMany(result -> result.followedBy(Flux.empty())));
   }
 }
