@@ -121,6 +121,7 @@ public final class IoTDBConnection implements Connection, Lifecycle {
     this.statementId = handshake.statementId;
     this.timeFactor = handshake.timeFactor;
     this.serverVersion = handshake.serverVersion;
+    this.statementTimeout = configuration.statementTimeout();
   }
 
   /**
@@ -133,6 +134,7 @@ public final class IoTDBConnection implements Connection, Lifecycle {
       Scheduler scheduler) {
     IoTDBAsyncClient client =
         createClient(configuration, configuration.host(), configuration.port(), clientManager);
+    AtomicBoolean connectionDelivered = new AtomicBoolean();
     return Mono.fromCompletionStage(() -> handshake(configuration, client))
         .timeout(configuration.connectTimeout())
         .onErrorMap(
@@ -145,10 +147,19 @@ public final class IoTDBConnection implements Connection, Lifecycle {
                         configuration.tls().enabled(),
                         configuration.connectTimeout(),
                         error))
+        // Cancellation before ownership transfers must release the transport; a late Thrift
+        // response must not retain the socket. Once onNext starts, the caller owns the connection.
+        .doOnCancel(
+            () -> {
+              if (!connectionDelivered.get()) {
+                client.close();
+              }
+            })
         .doOnError(error -> client.close())
         .map(
             handshake ->
-                new IoTDBConnection(configuration, clientManager, client, scheduler, handshake));
+                new IoTDBConnection(configuration, clientManager, client, scheduler, handshake))
+        .doOnNext(ignored -> connectionDelivered.set(true));
   }
 
   private static CompletableFuture<Handshake> handshake(
@@ -257,70 +268,84 @@ public final class IoTDBConnection implements Connection, Lifecycle {
   private Mono<IoTDBResult> runExecution(
       String sql, List<ParameterBinding> parameters, int fetchSize) {
     return Mono.defer(
-        () -> {
-          int effectiveFetchSize = effectiveFetchSize(fetchSize);
-          List<ParameterBinding> wireParameters = toWireParameters(parameters);
-          Mono<Execution> execution;
-          if (wireParameters.isEmpty()) {
-            execution =
-                executeStatement(sql, effectiveFetchSize)
-                    .map(response -> new Execution(response, null));
-          } else if (canUsePreparedStatement(sql, wireParameters)) {
-            execution = executePreparedStatement(sql, wireParameters, effectiveFetchSize);
-          } else {
-            // The tree dialect has no server side prepare; literals are the only verified path.
-            execution =
-                executeStatement(LiteralBinder.bind(sql, wireParameters), effectiveFetchSize)
-                    .map(response -> new Execution(response, null));
-          }
-          Duration timeout = statementTimeout;
-          AtomicBoolean resultDelivered = new AtomicBoolean();
-          Mono<IoTDBResult> result =
-              execution.map(
-                  completed ->
-                      buildResult(sql, completed.response(), fetchSize, completed.statementName()));
-          if (!timeout.isZero()) {
-            result = result.timeout(timeout);
-          }
-          return result
-              .doOnNext(ignored -> resultDelivered.set(true))
-              // Cancellation before the first response leaves the RPC outcome unknown. The
-              // transport must be destroyed rather than returned to a pool or used again.
-              .doOnCancel(
-                  () -> {
-                    if (!resultDelivered.get()) {
-                      statementActive.set(false);
-                      abort();
-                    }
-                  })
-              .onErrorResume(
-                  error -> {
-                    statementActive.set(false);
-                    if (error instanceof R2dbcException) {
-                      return Mono.error(error);
-                    }
-                    if (error instanceof TimeoutException) {
-                      abort();
-                      return Mono.error(
-                          new R2dbcTimeoutException(
-                              String.format(
-                                  R2dbcMessages
-                                      .EXCEPTION_THE_STATEMENT_TIMED_OUT_AFTER_ARG_37D4D030,
-                                  timeout)));
-                    }
-                    // The protocol state is unknown after a transport failure.
-                    abort();
-                    String message =
-                        ExceptionMapper.isTimeout(error)
-                            ? String.format(
-                                R2dbcMessages.EXCEPTION_THE_RPC_TIMED_OUT_AFTER_ARG_6B50D3BF,
-                                configuration.rpcTimeout())
-                            : String.format(
-                                R2dbcMessages.EXCEPTION_STATEMENT_EXECUTION_FAILED_ARG_D1EB77EA,
-                                error.getMessage());
-                    return Mono.error(ExceptionMapper.mapTransportFailure(message, error));
-                  });
-        });
+            () -> {
+              int effectiveFetchSize = effectiveFetchSize(fetchSize);
+              List<ParameterBinding> wireParameters = toWireParameters(parameters);
+              Mono<Execution> execution;
+              if (wireParameters.isEmpty()) {
+                execution =
+                    executeStatement(sql, effectiveFetchSize)
+                        .map(response -> new Execution(response, null));
+              } else if (canUsePreparedStatement(sql, wireParameters)) {
+                execution = executePreparedStatement(sql, wireParameters, effectiveFetchSize);
+              } else {
+                // The tree dialect has no server side prepare; literals are the only verified path.
+                execution =
+                    executeStatement(
+                            LiteralBinder.bind(sql, wireParameters, configuration.sqlDialect()),
+                            effectiveFetchSize)
+                        .map(response -> new Execution(response, null));
+              }
+              Duration timeout = statementTimeout;
+              AtomicBoolean resultDelivered = new AtomicBoolean();
+              Mono<IoTDBResult> result =
+                  execution
+                      // Thrift completes futures on its selector thread. Result construction can
+                      // decode metadata and must run on the driver's callback scheduler instead.
+                      .publishOn(scheduler)
+                      .map(
+                          completed ->
+                              buildResult(
+                                  sql, completed.response(), fetchSize, completed.statementName()));
+              if (!timeout.isZero()) {
+                result = result.timeout(timeout);
+              }
+              return result
+                  .doOnNext(ignored -> resultDelivered.set(true))
+                  // Cancellation before the first response leaves the RPC outcome unknown. The
+                  // transport must be destroyed rather than returned to a pool or used again.
+                  .doOnCancel(
+                      () -> {
+                        if (!resultDelivered.get()) {
+                          statementActive.set(false);
+                          abort();
+                        }
+                      })
+                  .onErrorResume(
+                      error -> {
+                        statementActive.set(false);
+                        if (error instanceof R2dbcException) {
+                          return Mono.error(error);
+                        }
+                        if (error instanceof TimeoutException) {
+                          abort();
+                          return Mono.error(
+                              new R2dbcTimeoutException(
+                                  String.format(
+                                      R2dbcMessages
+                                          .EXCEPTION_THE_STATEMENT_TIMED_OUT_AFTER_ARG_37D4D030,
+                                      timeout)));
+                        }
+                        // The protocol state is unknown after a transport failure.
+                        abort();
+                        String message =
+                            ExceptionMapper.isTimeout(error)
+                                ? String.format(
+                                    R2dbcMessages.EXCEPTION_THE_RPC_TIMED_OUT_AFTER_ARG_6B50D3BF,
+                                    configuration.rpcTimeout())
+                                : String.format(
+                                    R2dbcMessages.EXCEPTION_STATEMENT_EXECUTION_FAILED_ARG_D1EB77EA,
+                                    error.getMessage());
+                        return Mono.error(ExceptionMapper.mapTransportFailure(message, error));
+                      });
+            })
+        .onErrorResume(
+            error -> {
+              // The defer supplier performs synchronous parameter validation before the RPC
+              // result's error handler exists, so release the active slot at this boundary too.
+              statementActive.set(false);
+              return Mono.error(error);
+            });
   }
 
   /** Reads the next page of an active query; only called while the previous page is exhausted. */
@@ -379,11 +404,13 @@ public final class IoTDBConnection implements Connection, Lifecycle {
           Mono<TSExecuteStatementResp> attempt =
               prepareStatement(sql, parameters, statementName)
                   .then(
-                      call(
-                          client ->
-                              client.executePreparedStatement(
-                                  buildExecutePreparedRequest(
-                                      statementName, parameters, fetchSize))));
+                      Mono.defer(
+                          () ->
+                              call(
+                                  client ->
+                                      client.executePreparedStatement(
+                                          buildExecutePreparedRequest(
+                                              statementName, parameters, fetchSize)))));
           return attempt
               .doOnNext(response -> verifyExecutionStatus(response.getStatus(), sql))
               // A statement that failed before it reached the caller keeps no handle behind.
@@ -618,13 +645,13 @@ public final class IoTDBConnection implements Connection, Lifecycle {
   @Override
   public Statement createStatement(String sql) {
     requireOpen();
-    return new IoTDBStatement(this, sql);
+    return new IoTDBStatement(this, sql, configuration.sqlDialect());
   }
 
   @Override
   public Batch createBatch() {
     requireOpen();
-    return new IoTDBBatch(this);
+    return new IoTDBBatch(this, configuration.sqlDialect());
   }
 
   @Override

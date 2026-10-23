@@ -19,6 +19,7 @@
 
 package org.apache.iotdb.r2dbc.client;
 
+import org.apache.iotdb.r2dbc.IoTDBConnectionConfiguration.SqlDialect;
 import org.apache.iotdb.r2dbc.R2dbcMessages;
 import org.apache.iotdb.r2dbc.codec.LiteralBinder;
 import org.apache.iotdb.r2dbc.codec.ParameterBinding;
@@ -45,19 +46,21 @@ public final class IoTDBStatement implements Statement {
 
   private final IoTDBConnection connection;
   private final String sql;
+  private final SqlDialect dialect;
   private final int placeholders;
   private final List<Map<Integer, ParameterBinding>> bindingSets = new ArrayList<>();
   private int currentBindingSet;
   private int fetchSize;
 
-  IoTDBStatement(IoTDBConnection connection, String sql) {
+  IoTDBStatement(IoTDBConnection connection, String sql, SqlDialect dialect) {
     if (sql == null || sql.isEmpty()) {
       throw new IllegalArgumentException(
           R2dbcMessages.EXCEPTION_SQL_MUST_NOT_BE_NULL_OR_EMPTY_6BFC5576);
     }
     this.connection = connection;
     this.sql = sql;
-    this.placeholders = LiteralBinder.placeholderCount(sql);
+    this.dialect = dialect;
+    this.placeholders = LiteralBinder.placeholderCount(sql, dialect);
     this.bindingSets.add(new LinkedHashMap<>());
   }
 
@@ -129,7 +132,7 @@ public final class IoTDBStatement implements Statement {
   @Override
   public Publisher<? extends Result> execute() {
     List<List<ParameterBinding>> executionParameters = snapshotParameters();
-    List<String> statements = LiteralBinder.splitStatements(sql);
+    List<String> statements = LiteralBinder.splitStatements(sql, dialect);
     if (statements.size() > 1 && placeholders > 0) {
       throw new IoTDBR2dbcException(
           R2dbcMessages

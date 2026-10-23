@@ -74,6 +74,9 @@ public final class ParameterBinding {
       value = parameterValue;
     }
     requireSupported(value);
+    if (value instanceof CharSequence && !(value instanceof String)) {
+      value = value.toString();
+    }
     return new ParameterBinding(value, value.getClass(), false);
   }
 

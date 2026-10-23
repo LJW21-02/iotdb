@@ -47,6 +47,18 @@ public class ParameterBindingTest {
   }
 
   @Test
+  public void snapshotsMutableCharSequencesAsStrings() {
+    StringBuilder source = new StringBuilder("before");
+
+    ParameterBinding binding = ParameterBinding.of(source);
+    source.append(" after");
+
+    assertEquals("before", binding.encodedValue());
+    assertEquals(String.class, binding.encodedValue().getClass());
+    assertEquals("'before'", literal(binding));
+  }
+
+  @Test
   public void onlyVerifiedTypesUseTheTypedPath() {
     assertTrue(ParameterBinding.of("text").supportsTypedEncoding());
     assertTrue(ParameterBinding.of(1).supportsTypedEncoding());

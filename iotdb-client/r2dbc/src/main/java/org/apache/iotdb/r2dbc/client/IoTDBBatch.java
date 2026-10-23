@@ -19,6 +19,7 @@
 
 package org.apache.iotdb.r2dbc.client;
 
+import org.apache.iotdb.r2dbc.IoTDBConnectionConfiguration.SqlDialect;
 import org.apache.iotdb.r2dbc.R2dbcMessages;
 import org.apache.iotdb.r2dbc.codec.LiteralBinder;
 import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
@@ -40,10 +41,12 @@ import java.util.List;
 public final class IoTDBBatch implements Batch {
 
   private final IoTDBConnection connection;
+  private final SqlDialect dialect;
   private final List<String> statements = new ArrayList<>();
 
-  IoTDBBatch(IoTDBConnection connection) {
+  IoTDBBatch(IoTDBConnection connection, SqlDialect dialect) {
     this.connection = connection;
+    this.dialect = dialect;
   }
 
   @Override
@@ -52,7 +55,7 @@ public final class IoTDBBatch implements Batch {
       throw new IllegalArgumentException(
           R2dbcMessages.EXCEPTION_SQL_MUST_NOT_BE_NULL_OR_EMPTY_6BFC5576);
     }
-    if (LiteralBinder.placeholderCount(sql) > 0) {
+    if (LiteralBinder.placeholderCount(sql, dialect) > 0) {
       throw new IoTDBR2dbcException(
           R2dbcMessages.EXCEPTION_BATCH_STATEMENTS_MUST_NOT_CONTAIN_PARAMETERS_E2027860);
     }

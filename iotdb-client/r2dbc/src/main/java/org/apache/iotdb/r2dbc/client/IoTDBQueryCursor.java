@@ -162,18 +162,24 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
         Row row = null;
         boolean fetch = false;
         boolean complete = false;
+        boolean completeAfterRow = false;
         synchronized (this) {
           if (cancelled || finished) {
             return;
           }
-          if (demand <= 0) {
+          if (demand <= 0 && (hasBufferedRows() || moreData || fetching)) {
             return;
           }
-          try {
-            row = nextRow();
-          } catch (RuntimeException e) {
-            decodeError = e;
+          if (demand <= 0) {
             finished = true;
+            complete = true;
+          } else {
+            try {
+              row = nextRow();
+            } catch (RuntimeException e) {
+              decodeError = e;
+              finished = true;
+            }
           }
           if (decodeError != null) {
             // Release before signalling completion so a new statement on the same connection
@@ -182,8 +188,14 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
             sink.error(decodeError);
             return;
           }
-          if (row != null) {
+          if (complete) {
+            // The response already proved there are no more rows, so completion must not wait
+            // for another request after the final demanded row.
+          } else if (row != null) {
             demand--;
+            // A terminal page may contain exactly the requested number of rows. Complete in
+            // this drain pass instead of waiting for a subsequent request that will never come.
+            completeAfterRow = demand == 0 && !hasBufferedRows() && !moreData && !fetching;
           } else if (fetching) {
             return;
           } else if (moreData) {
@@ -195,10 +207,8 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
           }
         }
         if (complete) {
-          // Complete the server side cursor before the consumer is unblocked, so the next
-          // statement waits for the cleanup instead of racing with it.
-          close();
-          sink.complete();
+          // Queue cursor cleanup before notifying the consumer; later statements wait for it.
+          finish();
           return;
         }
         if (fetch) {
@@ -206,6 +216,10 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
           return;
         }
         sink.next(row);
+        if (completeAfterRow) {
+          finish();
+          return;
+        }
       }
     } finally {
       synchronized (this) {
@@ -227,6 +241,15 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
       block = decoder.decode(page);
       rowIndex = 0;
     }
+  }
+
+  private boolean hasBufferedRows() {
+    return (block != null && rowIndex < block.getPositionCount()) || !pages.isEmpty();
+  }
+
+  private void finish() {
+    close();
+    sink.complete();
   }
 
   private void fetchNextPage() {

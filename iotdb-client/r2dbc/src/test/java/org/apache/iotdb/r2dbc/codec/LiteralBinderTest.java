@@ -19,6 +19,7 @@
 
 package org.apache.iotdb.r2dbc.codec;
 
+import org.apache.iotdb.r2dbc.IoTDBConnectionConfiguration.SqlDialect;
 import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
 
 import org.junit.Test;
@@ -78,9 +79,45 @@ public class LiteralBinderTest {
   }
 
   @Test
-  public void handlesBackslashEscapedQuotes() {
-    String sql = "SELECT 'a" + BACKSLASH + "'?' FROM t WHERE a = ?";
-    assertEquals(1, LiteralBinder.placeholderCount(sql));
+  public void treatsBackslashAsOrdinaryStringContent() {
+    String sql = "SELECT 'C:" + BACKSLASH + "', ?";
+    assertEquals(1, LiteralBinder.placeholderCount(sql, SqlDialect.TABLE));
+    assertEquals(1, LiteralBinder.placeholderCount(sql, SqlDialect.TREE));
+    assertEquals(
+        "SELECT 'C:" + BACKSLASH + "', 7",
+        LiteralBinder.bind(sql, List.of(ParameterBinding.of(7)), SqlDialect.TREE));
+  }
+
+  @Test
+  public void followsDialectSpecificCommentRules() {
+    String consecutiveMinus = "SELECT s1 FROM root.d WHERE s1 > --?";
+    assertEquals(1, LiteralBinder.placeholderCount(consecutiveMinus, SqlDialect.TREE));
+    assertEquals(0, LiteralBinder.placeholderCount(consecutiveMinus, SqlDialect.TABLE));
+
+    String treeSql = "SELECT s1 FROM root.d WHERE s1 > --1; SELECT s1 FROM root.d";
+    assertEquals(2, LiteralBinder.splitStatements(treeSql, SqlDialect.TREE).size());
+    assertEquals(1, LiteralBinder.splitStatements(treeSql, SqlDialect.TABLE).size());
+
+    String tableComments = "SELECT 1 /* ; ? */; -- ; ?\nSELECT 2";
+    assertEquals(2, LiteralBinder.splitStatements(tableComments, SqlDialect.TABLE).size());
+    assertEquals(0, LiteralBinder.placeholderCount(tableComments, SqlDialect.TABLE));
+    assertEquals(2, LiteralBinder.placeholderCount(tableComments, SqlDialect.TREE));
+
+    assertEquals(1, LiteralBinder.placeholderCount("SELECT 1 -- comment\r?", SqlDialect.TABLE));
+    assertEquals(1, LiteralBinder.placeholderCount("SELECT /* ?", SqlDialect.TABLE));
+    assertEquals(
+        2, LiteralBinder.splitStatements("SELECT /* ?; SELECT 2", SqlDialect.TABLE).size());
+  }
+
+  @Test
+  public void splitsSemicolonsAfterBackslashTerminatedString() {
+    String sql = "SELECT 'C:" + BACKSLASH + ";'; SELECT 1";
+    assertEquals(
+        List.of("SELECT 'C:" + BACKSLASH + ";'", "SELECT 1"),
+        LiteralBinder.splitStatements(sql, SqlDialect.TABLE));
+    assertEquals(
+        List.of("SELECT 'C:" + BACKSLASH + ";'", "SELECT 1"),
+        LiteralBinder.splitStatements(sql, SqlDialect.TREE));
   }
 
   @Test

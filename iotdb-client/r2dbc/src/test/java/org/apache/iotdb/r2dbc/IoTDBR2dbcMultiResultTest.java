@@ -101,6 +101,47 @@ public class IoTDBR2dbcMultiResultTest {
         true);
   }
 
+  @Test
+  public void exactDemandForTheLastRowStillCompletes() throws Exception {
+    try (Node node = new Node()) {
+      node.singlePage = true;
+      IoTDBConnectionConfiguration configuration =
+          IoTDBConnectionConfiguration.from(
+              ConnectionFactoryOptions.builder()
+                  .option(ConnectionFactoryOptions.HOST, "127.0.0.1")
+                  .option(ConnectionFactoryOptions.PORT, node.port)
+                  .option(ConnectionFactoryOptions.USER, "test")
+                  .option(ConnectionFactoryOptions.PASSWORD, "test")
+                  .option(IoTDBConnectionFactoryOptions.SQL_DIALECT, "table")
+                  .option(IoTDBConnectionFactoryOptions.FETCH_SIZE, 1)
+                  .option(IoTDBConnectionFactoryOptions.RPC_TIMEOUT, Duration.ofSeconds(5))
+                  .build());
+      try (IoTDBR2dbcConnectionFactory factory = new IoTDBR2dbcConnectionFactory(configuration)) {
+        Connection connection = Mono.from(factory.create()).block(Duration.ofSeconds(5));
+        try {
+          Flux<Integer> rows =
+              Mono.from(connection.createStatement("SELECT v FROM probe").execute())
+                  .flatMapMany(
+                      result ->
+                          Flux.from(result.map((row, metadata) -> row.get("v", Integer.class))));
+
+          reactor.test.StepVerifier.create(rows, 1)
+              .expectNext(11)
+              .expectComplete()
+              .verify(Duration.ofSeconds(5));
+
+          assertEquals(0, node.fetches.get());
+          assertTrue(
+              "the terminal cursor must be closed", node.firstClose.await(5, TimeUnit.SECONDS));
+          node.allowFirstClose.countDown();
+        } finally {
+          node.allowFirstClose.countDown();
+          Mono.from(connection.close()).block(Duration.ofSeconds(5));
+        }
+      }
+    }
+  }
+
   private static void assertPagedResults(
       Function<Connection, Publisher<? extends Result>> execution, boolean onePrefetchedResult)
       throws Exception {
@@ -179,6 +220,7 @@ public class IoTDBR2dbcMultiResultTest {
     private final CountDownLatch firstClose = new CountDownLatch(1);
     private final CountDownLatch allowFirstClose = new CountDownLatch(1);
     private final List<String> completedOperations = new CopyOnWriteArrayList<>();
+    private volatile boolean singlePage;
     private final ServerSocket socket;
     private final TThreadPoolServer server;
     private final ExecutorService executor;
@@ -221,7 +263,7 @@ public class IoTDBR2dbcMultiResultTest {
                             .setDataTypeList(List.of("INT32"))
                             .setIgnoreTimeStamp(true)
                             .setQueryResult(List.of(page(id * 10 + 1)))
-                            .setMoreData(true);
+                            .setMoreData(!singlePage);
                       case "fetchResultsV2":
                         long fetchedQuery = ((TSFetchResultsReq) args[0]).getQueryId();
                         fetches.incrementAndGet();
