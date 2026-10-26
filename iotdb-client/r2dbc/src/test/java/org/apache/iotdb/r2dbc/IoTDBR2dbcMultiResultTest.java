@@ -20,10 +20,12 @@
 package org.apache.iotdb.r2dbc;
 
 import org.apache.iotdb.common.rpc.thrift.TSStatus;
+import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
 import org.apache.iotdb.rpc.TSStatusCode;
 import org.apache.iotdb.service.rpc.thrift.IClientRPCService;
 import org.apache.iotdb.service.rpc.thrift.ServerProperties;
 import org.apache.iotdb.service.rpc.thrift.TSCloseOperationReq;
+import org.apache.iotdb.service.rpc.thrift.TSExecuteStatementReq;
 import org.apache.iotdb.service.rpc.thrift.TSExecuteStatementResp;
 import org.apache.iotdb.service.rpc.thrift.TSFetchResultsReq;
 import org.apache.iotdb.service.rpc.thrift.TSFetchResultsResp;
@@ -33,6 +35,7 @@ import org.apache.iotdb.service.rpc.thrift.TSPrepareResp;
 import io.r2dbc.spi.Connection;
 import io.r2dbc.spi.ConnectionFactoryOptions;
 import io.r2dbc.spi.Result;
+import io.r2dbc.spi.ValidationDepth;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.server.TThreadPoolServer;
 import org.apache.thrift.transport.TServerSocket;
@@ -63,6 +66,7 @@ import java.util.function.Function;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 /** Exercises multi-result ordering through real framed Thrift, including asynchronous paging. */
@@ -78,6 +82,28 @@ public class IoTDBR2dbcMultiResultTest {
                 .add("SELECT v FROM probe")
                 .execute(),
         false);
+  }
+
+  @Test
+  public void compoundBatchTableSqlWaitsForEachQueryAndItsCleanup() throws Exception {
+    String first = "SELECT ';?' FROM probe -- ; ?";
+    String second = "/* ; ? */ SELECT \"v;?\" FROM probe";
+    assertPagedResults(
+        connection -> connection.createBatch().add(first + "\n; " + second).execute(),
+        false,
+        "table",
+        List.of(first, second));
+  }
+
+  @Test
+  public void compoundBatchTreeSqlUsesTreeOperatorsAndQuotedSemicolons() throws Exception {
+    String first = "SELECT 'a;?', `v;?` FROM root.probe WHERE v > --1";
+    String second = "SELECT v FROM root.probe";
+    assertPagedResults(
+        connection -> connection.createBatch().add(first + "; " + second).execute(),
+        false,
+        "tree",
+        List.of(first, second));
   }
 
   @Test
@@ -99,6 +125,37 @@ public class IoTDBR2dbcMultiResultTest {
                 .bind(0, 1)
                 .execute(),
         true);
+  }
+
+  @Test
+  public void malformedResultMetadataAbortsTheConnection() throws Exception {
+    try (Node node = new Node()) {
+      node.invalidMapping = true;
+      IoTDBConnectionConfiguration configuration =
+          IoTDBConnectionConfiguration.from(
+              ConnectionFactoryOptions.builder()
+                  .option(ConnectionFactoryOptions.HOST, "127.0.0.1")
+                  .option(ConnectionFactoryOptions.PORT, node.port)
+                  .option(ConnectionFactoryOptions.USER, "test")
+                  .option(ConnectionFactoryOptions.PASSWORD, "test")
+                  .build());
+      try (IoTDBR2dbcConnectionFactory factory = new IoTDBR2dbcConnectionFactory(configuration)) {
+        Connection connection = Mono.from(factory.create()).block(Duration.ofSeconds(5));
+        try {
+          assertThrows(
+              IoTDBR2dbcException.class,
+              () ->
+                  Mono.from(connection.createStatement("SELECT v FROM probe").execute())
+                      .block(Duration.ofSeconds(5)));
+          assertFalse(
+              Mono.from(connection.validate(ValidationDepth.LOCAL)).block(Duration.ofSeconds(5)));
+          assertThrows(IllegalStateException.class, () -> connection.createStatement("SELECT 1"));
+          assertEquals(1, node.executions.get());
+        } finally {
+          Mono.from(connection.close()).block(Duration.ofSeconds(5));
+        }
+      }
+    }
   }
 
   @Test
@@ -145,6 +202,15 @@ public class IoTDBR2dbcMultiResultTest {
   private static void assertPagedResults(
       Function<Connection, Publisher<? extends Result>> execution, boolean onePrefetchedResult)
       throws Exception {
+    assertPagedResults(execution, onePrefetchedResult, "table", null);
+  }
+
+  private static void assertPagedResults(
+      Function<Connection, Publisher<? extends Result>> execution,
+      boolean onePrefetchedResult,
+      String dialect,
+      List<String> expectedStatements)
+      throws Exception {
     try (Node node = new Node()) {
       IoTDBConnectionConfiguration configuration =
           IoTDBConnectionConfiguration.from(
@@ -153,7 +219,7 @@ public class IoTDBR2dbcMultiResultTest {
                   .option(ConnectionFactoryOptions.PORT, node.port)
                   .option(ConnectionFactoryOptions.USER, "test")
                   .option(ConnectionFactoryOptions.PASSWORD, "test")
-                  .option(IoTDBConnectionFactoryOptions.SQL_DIALECT, "table")
+                  .option(IoTDBConnectionFactoryOptions.SQL_DIALECT, dialect)
                   .option(IoTDBConnectionFactoryOptions.FETCH_SIZE, 1)
                   .option(IoTDBConnectionFactoryOptions.RPC_TIMEOUT, Duration.ofSeconds(5))
                   .build());
@@ -189,6 +255,9 @@ public class IoTDBR2dbcMultiResultTest {
           assertEquals(
               List.of("execute:1", "fetch:1", "close:1", "execute:2", "fetch:2", "close:2"),
               node.completedOperations);
+          if (expectedStatements != null) {
+            assertEquals(expectedStatements, node.executedStatements);
+          }
         } finally {
           node.allowFirstFetch.countDown();
           node.allowFirstClose.countDown();
@@ -220,7 +289,9 @@ public class IoTDBR2dbcMultiResultTest {
     private final CountDownLatch firstClose = new CountDownLatch(1);
     private final CountDownLatch allowFirstClose = new CountDownLatch(1);
     private final List<String> completedOperations = new CopyOnWriteArrayList<>();
+    private final List<String> executedStatements = new CopyOnWriteArrayList<>();
     private volatile boolean singlePage;
+    private volatile boolean invalidMapping;
     private final ServerSocket socket;
     private final TThreadPoolServer server;
     private final ExecutorService executor;
@@ -254,6 +325,9 @@ public class IoTDBR2dbcMultiResultTest {
                         return new TSPrepareResp().setStatus(success()).setParameterCount(1);
                       case "executeStatementV2":
                       case "executePreparedStatement":
+                        if (args[0] instanceof TSExecuteStatementReq) {
+                          executedStatements.add(((TSExecuteStatementReq) args[0]).getStatement());
+                        }
                         int id = executions.incrementAndGet();
                         completedOperations.add("execute:" + id);
                         return new TSExecuteStatementResp()
@@ -261,6 +335,8 @@ public class IoTDBR2dbcMultiResultTest {
                             .setQueryId(id)
                             .setColumns(List.of("v"))
                             .setDataTypeList(List.of("INT32"))
+                            .setColumnIndex2TsBlockColumnIndexList(
+                                invalidMapping ? List.of(0, 1) : List.of(0))
                             .setIgnoreTimeStamp(true)
                             .setQueryResult(List.of(page(id * 10 + 1)))
                             .setMoreData(!singlePage);

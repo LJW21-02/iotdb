@@ -46,6 +46,7 @@ public class IoTDBTypeMapperTest {
     assertEquals(R2dbcType.DATE, IoTDBTypeMapper.toR2dbcType(TSDataType.DATE));
     assertEquals(R2dbcType.TIMESTAMP, IoTDBTypeMapper.toR2dbcType(TSDataType.TIMESTAMP));
     assertEquals(R2dbcType.VARBINARY, IoTDBTypeMapper.toR2dbcType(TSDataType.BLOB));
+    assertEquals(R2dbcType.VARCHAR, IoTDBTypeMapper.toR2dbcType(TSDataType.OBJECT));
   }
 
   @Test
@@ -55,6 +56,7 @@ public class IoTDBTypeMapperTest {
         LocalDateTime.class, IoTDBTypeMapper.toR2dbcType(TSDataType.TIMESTAMP).getJavaType());
     assertEquals(LocalDate.class, IoTDBTypeMapper.toR2dbcType(TSDataType.DATE).getJavaType());
     assertEquals(ByteBuffer.class, IoTDBTypeMapper.toR2dbcType(TSDataType.BLOB).getJavaType());
+    assertEquals(String.class, IoTDBTypeMapper.toR2dbcType(TSDataType.OBJECT).getJavaType());
   }
 
   @Test
@@ -65,7 +67,6 @@ public class IoTDBTypeMapperTest {
 
   @Test
   public void rejectsTypesWithoutAVerifiedMapping() {
-    assertThrows(IoTDBR2dbcException.class, () -> IoTDBTypeMapper.toR2dbcType(TSDataType.OBJECT));
     assertThrows(IoTDBR2dbcException.class, () -> IoTDBTypeMapper.toR2dbcType(TSDataType.UNKNOWN));
   }
 }

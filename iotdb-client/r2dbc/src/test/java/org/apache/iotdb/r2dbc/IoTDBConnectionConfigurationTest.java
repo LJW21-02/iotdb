@@ -24,8 +24,10 @@ import org.apache.iotdb.r2dbc.IoTDBConnectionConfiguration.SqlDialect;
 import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
 
 import io.r2dbc.spi.ConnectionFactoryOptions;
+import io.r2dbc.spi.Option;
 import org.junit.Test;
 
+import java.nio.CharBuffer;
 import java.time.Duration;
 import java.time.ZoneId;
 
@@ -47,6 +49,8 @@ public class IoTDBConnectionConfigurationTest {
     assertEquals("db.example", configuration.host());
     assertEquals(6667, configuration.port());
     assertEquals("demo", configuration.database());
+    assertNull(configuration.user());
+    assertNull(configuration.password());
     assertEquals(SqlDialect.TABLE, configuration.sqlDialect());
     assertEquals(ZoneId.of("UTC"), configuration.zoneId());
     assertEquals(Protocol.BINARY, configuration.protocol());
@@ -186,5 +190,69 @@ public class IoTDBConnectionConfigurationTest {
         from("r2dbc:iotdb://user:secret@localhost:6667/demo");
     assertFalse(configuration.toString().contains("secret"));
     assertTrue(configuration.toString().contains("REDACTED"));
+  }
+
+  @Test
+  public void omittedPasswordDoesNotDefaultToTheUser() {
+    IoTDBConnectionConfiguration configuration =
+        IoTDBConnectionConfiguration.from(
+            ConnectionFactoryOptions.builder()
+                .option(ConnectionFactoryOptions.USER, "user")
+                .build());
+    assertEquals("user", configuration.user());
+    assertNull(configuration.password());
+  }
+
+  @Test
+  public void passwordCharSequencesAreSnapshottedWithoutTrimming() {
+    StringBuilder builder = new StringBuilder(" secret ");
+    IoTDBConnectionConfiguration fromBuilder =
+        IoTDBConnectionConfiguration.from(
+            ConnectionFactoryOptions.builder()
+                .option(ConnectionFactoryOptions.PASSWORD, builder)
+                .build());
+    builder.setCharAt(1, 'x');
+    assertEquals(" secret ", fromBuilder.password());
+
+    CharBuffer buffer = CharBuffer.wrap("_secret".toCharArray());
+    buffer.position(1);
+    IoTDBConnectionConfiguration fromBuffer =
+        IoTDBConnectionConfiguration.from(
+            ConnectionFactoryOptions.builder()
+                .option(ConnectionFactoryOptions.PASSWORD, buffer)
+                .build());
+    buffer.put(1, 'x');
+    buffer.position(2);
+    assertEquals("secret", fromBuffer.password());
+
+    assertEquals(" secret ", from("r2dbc:iotdb://user:%20secret%20@localhost/demo").password());
+  }
+
+  @Test
+  public void explicitEmptyPasswordIsPreserved() {
+    IoTDBConnectionConfiguration configuration =
+        IoTDBConnectionConfiguration.from(
+            ConnectionFactoryOptions.builder()
+                .option(ConnectionFactoryOptions.USER, "user")
+                .option(ConnectionFactoryOptions.PASSWORD, new StringBuilder())
+                .build());
+    assertEquals("", configuration.password());
+  }
+
+  @Test
+  public void invalidPasswordTypeDoesNotExposeItsValue() {
+    IoTDBR2dbcException exception =
+        assertThrows(
+            IoTDBR2dbcException.class,
+            () ->
+                IoTDBConnectionConfiguration.from(
+                    ConnectionFactoryOptions.builder()
+                        .option(Option.sensitiveValueOf("password"), 987654321)
+                        .build()));
+    assertEquals(
+        String.format(
+            R2dbcMessages.EXCEPTION_OPTION_ARG_MUST_BE_A_CHARSEQUENCE_2C9A9AF8, "password"),
+        exception.getMessage());
+    assertFalse(exception.getMessage().contains("987654321"));
   }
 }

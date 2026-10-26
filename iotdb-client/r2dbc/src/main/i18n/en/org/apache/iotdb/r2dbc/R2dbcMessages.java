@@ -24,6 +24,15 @@ public final class R2dbcMessages {
 
   private R2dbcMessages() {}
 
+  public static final String EXCEPTION_OPTION_ARG_MUST_BE_A_CHARSEQUENCE_2C9A9AF8 = "Option '%s' must be a CharSequence";
+  public static final String EXCEPTION_TLS_HANDSHAKE_MADE_NO_PROGRESS_WHILE_WRAPPING_B751672A = "TLS handshake made no progress while wrapping";
+  public static final String EXCEPTION_UNSUPPORTED_TLS_HANDSHAKE_STATUS_ARG_814D493F = "Unsupported TLS handshake status %s";
+  public static final String EXCEPTION_TLS_CONNECTION_CLOSED_DURING_HANDSHAKE_8EC0DFDC = "TLS connection closed during handshake";
+  public static final String EXCEPTION_TLS_CONNECTION_CLOSED_DURING_UNWRAP_55951C7D = "TLS connection closed during unwrap";
+  public static final String EXCEPTION_TLS_CONNECTION_CLOSED_DURING_WRAP_6C905D58 = "TLS connection closed during wrap";
+  public static final String EXCEPTION_OPEN_IS_NOT_IMPLEMENTED_FOR_TLSNONBLOCKINGSOCKET_C4F57ED3 = "open() is not implemented for TlsNonblockingSocket";
+  public static final String EXCEPTION_WRITE_BUFFER_REPLACED_WHILE_DATA_WAS_PENDING_60A9DCFA = "Write buffer replaced while data was pending";
+
   public static final String EXCEPTION_A_PARTIALLY_REDIRECTED_MULTI_DEVICE_RESPONSE_CANNOT_BE_REPLAYED_SAFELY_162D6946 = "A partially redirected multi device response cannot be replayed safely";
 
   public static final String EXCEPTION_THE_REDIRECTION_BUDGET_OF_ARG_HOPS_IS_EXHAUSTED_344A9A03 = "The redirection budget of %d hops is exhausted";
@@ -94,6 +103,10 @@ public final class R2dbcMessages {
   public static final String EXCEPTION_UNEXPECTED_ARG_RESPONSE_FROM_IOTDB_6A4FBFB0 = "Unexpected %s response from IoTDB";
   public static final String EXCEPTION_UNSUPPORTED_IOTDB_DATA_TYPE_ARG_69C453DA = "Unsupported IoTDB data type: %s";
   public static final String EXCEPTION_VALUES_OF_TYPE_ARG_ARE_NOT_SUPPORTED_AS_STATEMENT_PARAMETERS_F4A3A5F4 = "Values of type %s are not supported as statement parameters";
+  public static final String EXCEPTION_IOTDB_COLUMN_MAPPING_HAS_ARG_ENTRIES_EXPECTED_ARG_E16BC4F0 = "IoTDB column mapping has %d entries; expected %d";
+  public static final String EXCEPTION_INVALID_IOTDB_COLUMN_MAPPING_INDEX_ARG_FOR_COLUMN_ARG_853658EC = "Invalid IoTDB column mapping index %s for column %d";
+  public static final String EXCEPTION_IOTDB_COLUMN_MAPPING_INDEX_ARG_FOR_COLUMN_ARG_EXCEEDS_THE_ARG_TSBLOCK_VALUE_COLUMNS_BB5F2189 = "IoTDB column mapping index %d for column %d exceeds the %d TsBlock value columns";
+  public static final String EXCEPTION_INVALID_OBJECT_REFERENCE_RETURNED_BY_IOTDB_D4D87374 = "Invalid OBJECT reference returned by IoTDB";
   public static final String LOG_CLEANING_UP_THE_QUERY_HANDLE_FAILED_DE915B4D = "Cleaning up the query handle failed";
   public static final String LOG_CLOSING_THE_R2DBC_CONNECTION_FAILED_D2D86252 = "Closing the R2DBC connection failed";
   public static final String LOG_IOTDB_R2DBC_CONNECTION_CLOSED_FAA1CE20 = "IoTDB R2DBC connection closed";

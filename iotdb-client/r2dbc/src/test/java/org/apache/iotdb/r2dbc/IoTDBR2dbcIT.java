@@ -283,12 +283,16 @@ public class IoTDBR2dbcIT {
               + DATABASE
               + ".batch_samples(device STRING TAG, v INT32 FIELD)");
 
-      // Statements without parameters run in order.
+      // Several statements in one add() run in order and each produces a Result.
       Batch batch =
           connection
               .createBatch()
-              .add("INSERT INTO " + DATABASE + ".batch_samples(time,device,v) VALUES (1,'b1',1)")
-              .add("INSERT INTO " + DATABASE + ".batch_samples(time,device,v) VALUES (2,'b1',2)");
+              .add(
+                  "INSERT INTO "
+                      + DATABASE
+                      + ".batch_samples(time,device,v) VALUES (1,'b1',1); INSERT INTO "
+                      + DATABASE
+                      + ".batch_samples(time,device,v) VALUES (2,'b1',2)");
       assertEquals(2, Flux.from(batch.execute()).cast(Result.class).collectList().block().size());
 
       // Parameter placeholders are rejected for batches.

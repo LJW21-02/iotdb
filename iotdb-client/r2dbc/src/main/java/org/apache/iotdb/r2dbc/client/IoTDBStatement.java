@@ -66,9 +66,7 @@ public final class IoTDBStatement implements Statement {
 
   @Override
   public Statement add() {
-    if (bindingSets.get(currentBindingSet).size() < placeholders) {
-      throw new IllegalStateException(R2dbcMessages.EXCEPTION_PARAMETER_ARG_IS_NOT_BOUND_F893971C);
-    }
+    snapshotBindingSet(bindingSets.get(currentBindingSet));
     bindingSets.add(new LinkedHashMap<>());
     currentBindingSet = bindingSets.size() - 1;
     return this;
@@ -154,18 +152,22 @@ public final class IoTDBStatement implements Statement {
   private List<List<ParameterBinding>> snapshotParameters() {
     List<List<ParameterBinding>> snapshot = new ArrayList<>(bindingSets.size());
     for (Map<Integer, ParameterBinding> bindings : bindingSets) {
-      List<ParameterBinding> ordered = new ArrayList<>(placeholders);
-      for (int index = 0; index < placeholders; index++) {
-        ParameterBinding binding = bindings.get(index);
-        if (binding == null) {
-          throw new IllegalStateException(
-              String.format(R2dbcMessages.EXCEPTION_PARAMETER_ARG_IS_NOT_BOUND_F893971C, index));
-        }
-        ordered.add(binding);
-      }
-      snapshot.add(ordered);
+      snapshot.add(snapshotBindingSet(bindings));
     }
     return snapshot;
+  }
+
+  private List<ParameterBinding> snapshotBindingSet(Map<Integer, ParameterBinding> bindings) {
+    List<ParameterBinding> ordered = new ArrayList<>(placeholders);
+    for (int index = 0; index < placeholders; index++) {
+      ParameterBinding binding = bindings.get(index);
+      if (binding == null) {
+        throw new IllegalStateException(
+            String.format(R2dbcMessages.EXCEPTION_PARAMETER_ARG_IS_NOT_BOUND_F893971C, index));
+      }
+      ordered.add(binding);
+    }
+    return ordered;
   }
 
   private void requireValidIndex(int index) {

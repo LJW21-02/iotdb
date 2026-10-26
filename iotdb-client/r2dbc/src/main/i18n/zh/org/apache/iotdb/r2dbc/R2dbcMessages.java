@@ -24,6 +24,15 @@ public final class R2dbcMessages {
 
   private R2dbcMessages() {}
 
+  public static final String EXCEPTION_OPTION_ARG_MUST_BE_A_CHARSEQUENCE_2C9A9AF8 = "选项 '%s' 必须为 CharSequence";
+  public static final String EXCEPTION_TLS_HANDSHAKE_MADE_NO_PROGRESS_WHILE_WRAPPING_B751672A = "TLS 握手封装数据时未取得进展";
+  public static final String EXCEPTION_UNSUPPORTED_TLS_HANDSHAKE_STATUS_ARG_814D493F = "不支持的 TLS 握手状态：%s";
+  public static final String EXCEPTION_TLS_CONNECTION_CLOSED_DURING_HANDSHAKE_8EC0DFDC = "TLS 连接在握手期间关闭";
+  public static final String EXCEPTION_TLS_CONNECTION_CLOSED_DURING_UNWRAP_55951C7D = "TLS 连接在解包期间关闭";
+  public static final String EXCEPTION_TLS_CONNECTION_CLOSED_DURING_WRAP_6C905D58 = "TLS 连接在封装期间关闭";
+  public static final String EXCEPTION_OPEN_IS_NOT_IMPLEMENTED_FOR_TLSNONBLOCKINGSOCKET_C4F57ED3 = "TlsNonblockingSocket 未实现 open()";
+  public static final String EXCEPTION_WRITE_BUFFER_REPLACED_WHILE_DATA_WAS_PENDING_60A9DCFA = "仍有待发送数据时写缓冲区被替换";
+
   public static final String EXCEPTION_A_PARTIALLY_REDIRECTED_MULTI_DEVICE_RESPONSE_CANNOT_BE_REPLAYED_SAFELY_162D6946 = "多设备响应发生部分重定向，无法安全重放";
 
   public static final String EXCEPTION_THE_REDIRECTION_BUDGET_OF_ARG_HOPS_IS_EXHAUSTED_344A9A03 = "%d 次重定向预算已用尽";
@@ -93,6 +102,10 @@ public final class R2dbcMessages {
   public static final String EXCEPTION_TYPE_MUST_NOT_BE_NULL_3C9753B3 = "type 不能为空";
   public static final String EXCEPTION_UNEXPECTED_ARG_RESPONSE_FROM_IOTDB_6A4FBFB0 = "IoTDB 返回了非预期的 %s 响应";
   public static final String EXCEPTION_UNSUPPORTED_IOTDB_DATA_TYPE_ARG_69C453DA = "不支持的 IoTDB 数据类型：%s";
+  public static final String EXCEPTION_IOTDB_COLUMN_MAPPING_HAS_ARG_ENTRIES_EXPECTED_ARG_E16BC4F0 = "IoTDB 列映射包含 %d 项，预期为 %d 项";
+  public static final String EXCEPTION_INVALID_IOTDB_COLUMN_MAPPING_INDEX_ARG_FOR_COLUMN_ARG_853658EC = "IoTDB 列映射索引 %s 无效，列号为 %d";
+  public static final String EXCEPTION_IOTDB_COLUMN_MAPPING_INDEX_ARG_FOR_COLUMN_ARG_EXCEEDS_THE_ARG_TSBLOCK_VALUE_COLUMNS_BB5F2189 = "IoTDB 列映射索引 %d（列 %d）超出 TsBlock 的 %d 个值列范围";
+  public static final String EXCEPTION_INVALID_OBJECT_REFERENCE_RETURNED_BY_IOTDB_D4D87374 = "IoTDB 返回的 OBJECT 引用无效";
   public static final String EXCEPTION_VALUES_OF_TYPE_ARG_ARE_NOT_SUPPORTED_AS_STATEMENT_PARAMETERS_F4A3A5F4 = "不支持类型为 %s 的语句参数";
   public static final String LOG_CLEANING_UP_THE_QUERY_HANDLE_FAILED_DE915B4D = "清理查询句柄失败";
   public static final String LOG_CLOSING_THE_R2DBC_CONNECTION_FAILED_D2D86252 = "关闭 R2DBC 连接失败";

@@ -86,19 +86,38 @@ final class RowDecoder {
 
   /** Deserializes one page of TsBlock bytes. */
   TsBlock decode(ByteBuffer page) {
+    TsBlock block;
     try {
-      return SERDE.deserialize(page.duplicate());
+      block = SERDE.deserialize(page.duplicate());
     } catch (RuntimeException e) {
       throw new IoTDBR2dbcException(
           String.format(
               R2dbcMessages.EXCEPTION_FAILED_TO_DECODE_A_TSBLOCK_ARG_050F52E4, e.getMessage()),
           e);
     }
+    validateBlockIndexes(block);
+    return block;
   }
 
   /** The row at {@code rowIndex} of a decoded page. */
   IoTDBRow row(TsBlock block, int rowIndex) {
     return new IoTDBRow(block, rowIndex, metadata, zoneId, timeFactor, columnTypes, tsBlockIndexes);
+  }
+
+  private void validateBlockIndexes(TsBlock block) {
+    int valueColumnCount = block.getValueColumnCount();
+    for (int i = 0; i < tsBlockIndexes.length; i++) {
+      int mapped = tsBlockIndexes[i];
+      if (mapped >= valueColumnCount) {
+        throw new IoTDBR2dbcException(
+            String.format(
+                R2dbcMessages
+                    .EXCEPTION_IOTDB_COLUMN_MAPPING_INDEX_ARG_FOR_COLUMN_ARG_EXCEEDS_THE_ARG_TSBLOCK_VALUE_COLUMNS_BB5F2189,
+                mapped,
+                i,
+                valueColumnCount));
+      }
+    }
   }
 
   /** Column names, types and TsBlock positions of one server response. */
@@ -139,15 +158,28 @@ final class RowDecoder {
       }
       int[] tsBlockIndexes = new int[names.size()];
       List<Integer> serverMapping = response.getColumnIndex2TsBlockColumnIndexList();
+      boolean hasMapping = serverMapping != null && !serverMapping.isEmpty();
+      if (hasMapping && serverMapping.size() != serverColumns.size()) {
+        throw new IoTDBR2dbcException(
+            String.format(
+                R2dbcMessages.EXCEPTION_IOTDB_COLUMN_MAPPING_HAS_ARG_ENTRIES_EXPECTED_ARG_E16BC4F0,
+                serverMapping.size(),
+                serverColumns.size()));
+      }
       int offset = ignoreTimeStamp ? 0 : 1;
       if (!ignoreTimeStamp) {
         tsBlockIndexes[0] = -1;
       }
       for (int i = 0; i < serverColumns.size(); i++) {
-        int mapped =
-            serverMapping != null && serverMapping.size() == serverColumns.size()
-                ? serverMapping.get(i)
-                : i;
+        Integer mapped = hasMapping ? serverMapping.get(i) : Integer.valueOf(i);
+        if (mapped == null || mapped < 0) {
+          throw new IoTDBR2dbcException(
+              String.format(
+                  R2dbcMessages
+                      .EXCEPTION_INVALID_IOTDB_COLUMN_MAPPING_INDEX_ARG_FOR_COLUMN_ARG_853658EC,
+                  mapped,
+                  i));
+        }
         tsBlockIndexes[offset + i] = mapped;
       }
       return new Columns(names, types, tsBlockIndexes);

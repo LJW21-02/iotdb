@@ -59,7 +59,7 @@ public final class IoTDBBatch implements Batch {
       throw new IoTDBR2dbcException(
           R2dbcMessages.EXCEPTION_BATCH_STATEMENTS_MUST_NOT_CONTAIN_PARAMETERS_E2027860);
     }
-    statements.add(sql);
+    statements.addAll(LiteralBinder.splitStatements(sql, dialect));
     return this;
   }
 

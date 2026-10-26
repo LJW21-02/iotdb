@@ -96,7 +96,7 @@ public record IoTDBConnectionConfiguration(
 
   public static IoTDBConnectionConfiguration from(ConnectionFactoryOptions options) {
     String user = stringValue(options, ConnectionFactoryOptions.USER, null);
-    String password = stringValue(options, ConnectionFactoryOptions.PASSWORD, user);
+    String password = passwordValue(options);
     requireFrameCompressionSupported(options);
     return new IoTDBConnectionConfiguration(
         stringValue(options, ConnectionFactoryOptions.HOST, DEFAULT_HOST),
@@ -159,6 +159,22 @@ public record IoTDBConnectionConfiguration(
               value));
     }
     return (String) value;
+  }
+
+  private static String passwordValue(ConnectionFactoryOptions options) {
+    Object value = options.getValue(ConnectionFactoryOptions.PASSWORD);
+    if (value == null) {
+      return null;
+    }
+    if (!(value instanceof CharSequence)) {
+      throw new IoTDBR2dbcException(
+          String.format(
+              R2dbcMessages.EXCEPTION_OPTION_ARG_MUST_BE_A_CHARSEQUENCE_2C9A9AF8,
+              ConnectionFactoryOptions.PASSWORD.name()));
+    }
+    // Credentials are not trimmed or defaulted. Snapshot mutable CharSequence implementations
+    // before the immutable configuration is shared with connection attempts.
+    return value.toString();
   }
 
   /** Only uncompressed frames are verified; Snappy must not be silently downgraded or accepted. */

@@ -29,6 +29,7 @@ import org.apache.tsfile.utils.DateUtils;
 import org.junit.Test;
 
 import java.nio.ByteBuffer;
+import java.nio.ReadOnlyBufferException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -39,9 +40,10 @@ import java.util.NoSuchElementException;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 public class IoTDBRowTest {
 
@@ -75,7 +77,48 @@ public class IoTDBRowTest {
     assertEquals(Instant.ofEpochMilli(TICKS), row.get(5, Instant.class));
     byte[] bytes = row.get(3, byte[].class);
     assertArrayEquals(new byte[] {1, 2, 3}, bytes);
-    assertNotSame(row.get(3, ByteBuffer.class), bytes);
+  }
+
+  @Test
+  public void binaryBuffersAreReadOnlySnapshotsOfTheCell() {
+    TsBlockBuilder builder = new TsBlockBuilder(List.of(TSDataType.BLOB));
+    builder.getTimeColumnBuilder().writeLong(TICKS);
+    builder.getColumnBuilder(0).writeBinary(new Binary(new byte[] {1, 2, 3}));
+    builder.declarePosition();
+    TsBlock block = builder.build();
+    IoTDBRow row =
+        new IoTDBRow(
+            block,
+            0,
+            IoTDBRowMetadata.of(List.of("blob"), List.of(TSDataType.BLOB)),
+            UTC,
+            1_000,
+            new TSDataType[] {TSDataType.BLOB},
+            new int[] {0});
+
+    ByteBuffer explicit = row.get(0, ByteBuffer.class);
+    ByteBuffer defaultValue = (ByteBuffer) row.get(0);
+    assertTrue(explicit.isReadOnly());
+    assertTrue(defaultValue.isReadOnly());
+    assertFalse(explicit.hasArray());
+    assertFalse(defaultValue.hasArray());
+    assertThrows(ReadOnlyBufferException.class, () -> explicit.put(0, (byte) 9));
+    assertThrows(ReadOnlyBufferException.class, () -> defaultValue.put(0, (byte) 9));
+    assertArrayEquals(new byte[] {1, 2, 3}, block.getColumn(0).getBinary(0).getValues());
+    assertArrayEquals(new byte[] {1, 2, 3}, row.get(0, byte[].class));
+
+    explicit.position(1);
+    assertEquals(0, defaultValue.position());
+    assertEquals(0, row.get(0, ByteBuffer.class).position());
+
+    byte[] detached = row.get(0, byte[].class);
+    detached[0] = 9;
+    assertArrayEquals(new byte[] {1, 2, 3}, block.getColumn(0).getBinary(0).getValues());
+    assertArrayEquals(new byte[] {1, 2, 3}, row.get(0, byte[].class));
+
+    block.getColumn(0).getBinary(0).getValues()[1] = 8;
+    assertEquals(2, explicit.get(1));
+    assertEquals(2, defaultValue.get(1));
   }
 
   @Test

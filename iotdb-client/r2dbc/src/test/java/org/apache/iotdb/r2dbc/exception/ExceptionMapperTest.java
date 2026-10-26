@@ -21,6 +21,7 @@ package org.apache.iotdb.r2dbc.exception;
 
 import org.apache.iotdb.common.rpc.thrift.TEndPoint;
 import org.apache.iotdb.common.rpc.thrift.TSStatus;
+import org.apache.iotdb.r2dbc.R2dbcMessages;
 import org.apache.iotdb.rpc.TSStatusCode;
 
 import io.r2dbc.spi.R2dbcBadGrammarException;
@@ -163,7 +164,10 @@ public class ExceptionMapperTest {
         assertThrows(
             R2dbcException.class, () -> ExceptionMapper.verifySuccess(recommendation, null));
 
-    assertTrue(failure.getMessage().contains("without naming a target node"));
+    assertEquals(
+        R2dbcMessages
+            .EXCEPTION_THE_SERVER_RECOMMENDED_A_REDIRECTION_WITHOUT_NAMING_A_TARGET_NODE_0F043C12,
+        failure.getMessage());
   }
 
   @Test
@@ -181,7 +185,12 @@ public class ExceptionMapperTest {
         mapped instanceof IoTDBR2dbcException);
     assertSame(handshake, mapped.getCause());
     assertTrue(mapped.getMessage().contains("127.0.0.1:6667"));
-    assertTrue(mapped.getMessage().contains("over TLS"));
+    assertEquals(
+        String.format(
+            R2dbcMessages.EXCEPTION_FAILED_TO_CONNECT_TO_IOTDB_AT_ARG_ARG_OVER_TLS_DD4D72A8,
+            "127.0.0.1",
+            6667),
+        mapped.getMessage());
   }
 
   @Test
@@ -248,15 +257,26 @@ public class ExceptionMapperTest {
     R2dbcException mapped = ExceptionMapper.mapPageFailure(thriftTimeout);
 
     assertTrue(mapped instanceof R2dbcTimeoutException);
-    assertTrue(mapped.getMessage().contains("Reading the next page failed"));
+    assertSame(thriftTimeout, mapped.getCause());
+    assertEquals(
+        String.format(
+            R2dbcMessages.EXCEPTION_READING_THE_NEXT_PAGE_FAILED_ARG_74678706,
+            thriftTimeout.getMessage()),
+        mapped.getMessage());
   }
 
   @Test
   public void aPlainTransportFailureOnAPageStaysGenericAndKeepsThePageContext() {
-    R2dbcException mapped = ExceptionMapper.mapPageFailure(new IOException("connection reset"));
+    IOException failure = new IOException("connection reset");
+    R2dbcException mapped = ExceptionMapper.mapPageFailure(failure);
 
     assertTrue(mapped instanceof IoTDBR2dbcException);
     assertFalse(mapped instanceof R2dbcTransientException);
-    assertTrue(mapped.getMessage().contains("Reading the next page failed"));
+    assertSame(failure, mapped.getCause());
+    assertEquals(
+        String.format(
+            R2dbcMessages.EXCEPTION_READING_THE_NEXT_PAGE_FAILED_ARG_74678706,
+            failure.getMessage()),
+        mapped.getMessage());
   }
 }

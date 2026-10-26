@@ -19,6 +19,8 @@
 
 package org.apache.iotdb.r2dbc.transport;
 
+import org.apache.iotdb.r2dbc.R2dbcMessages;
+
 import org.apache.thrift.TConfiguration;
 import org.apache.thrift.transport.TNonblockingTransport;
 import org.apache.thrift.transport.TTransportException;
@@ -151,7 +153,8 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
             }
             continue;
           }
-          requireOk(unwrap, "handshake");
+          requireOk(
+              unwrap, R2dbcMessages.EXCEPTION_TLS_CONNECTION_CLOSED_DURING_HANDSHAKE_8EC0DFDC);
           break;
         case NEED_WRAP:
           appOut.clear();
@@ -163,7 +166,8 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
             return;
           }
           if (produced == 0) {
-            throw new IOException("TLS handshake made no progress while wrapping");
+            throw new IOException(
+                R2dbcMessages.EXCEPTION_TLS_HANDSHAKE_MADE_NO_PROGRESS_WHILE_WRAPPING_B751672A);
           }
           break;
         case NEED_TASK:
@@ -175,7 +179,9 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
           interestOps(SelectionKey.OP_READ);
           break;
         default:
-          throw new IOException("unsupported TLS handshake status " + status);
+          throw new IOException(
+              String.format(
+                  R2dbcMessages.EXCEPTION_UNSUPPORTED_TLS_HANDSHAKE_STATUS_ARG_814D493F, status));
       }
     }
   }
@@ -187,9 +193,9 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
     }
   }
 
-  private void requireOk(SSLEngineResult result, String phase) throws SSLException {
+  private void requireOk(SSLEngineResult result, String closedMessage) throws SSLException {
     if (result.getStatus() == Status.CLOSED) {
-      throw new SSLException("TLS connection closed during " + phase);
+      throw new SSLException(closedMessage);
     }
     if (result.getHandshakeStatus() == HandshakeStatus.NEED_TASK) {
       runDelegatedTasks();
@@ -218,7 +224,8 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
 
   @Override
   public void open() throws TTransportException {
-    throw new TTransportException("open() is not implemented for TlsNonblockingSocket");
+    throw new TTransportException(
+        R2dbcMessages.EXCEPTION_OPEN_IS_NOT_IMPLEMENTED_FOR_TLSNONBLOCKINGSOCKET_C4F57ED3);
   }
 
   @Override
@@ -284,7 +291,7 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
         appIn.clear();
         SSLEngineResult result = engine.unwrap(netIn, appIn);
         appIn.flip();
-        requireOk(result, "unwrap");
+        requireOk(result, R2dbcMessages.EXCEPTION_TLS_CONNECTION_CLOSED_DURING_UNWRAP_55951C7D);
         if (result.getStatus() == Status.BUFFER_UNDERFLOW) {
           // Preserve the partial record, then try to append the next TCP fragment before
           // returning to the selector.
@@ -359,7 +366,8 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
       }
       if (encryptedButUnacknowledged > source.remaining()) {
         throw new TTransportException(
-            TTransportException.CORRUPTED_DATA, "write buffer replaced while data was pending");
+            TTransportException.CORRUPTED_DATA,
+            R2dbcMessages.EXCEPTION_WRITE_BUFFER_REPLACED_WHILE_DATA_WAS_PENDING_60A9DCFA);
       }
       int settled = encryptedButUnacknowledged;
       source.position(source.position() + settled);
@@ -433,7 +441,7 @@ final class TlsNonblockingSocket extends TNonblockingTransport implements FrameL
         ensureNetOutCapacity(engine.getSession().getPacketBufferSize());
         continue;
       }
-      requireOk(result, "wrap");
+      requireOk(result, R2dbcMessages.EXCEPTION_TLS_CONNECTION_CLOSED_DURING_WRAP_6C905D58);
       if (result.bytesConsumed() == 0 && result.bytesProduced() == 0) {
         break;
       }

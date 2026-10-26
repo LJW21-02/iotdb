@@ -58,7 +58,7 @@ Mono.from(factory.create())
 The connection URL form is also supported: `r2dbc:iotdb://user:password@host:6667/database`
 (credentials belong to the user info part; the SPI rejects `?user=...&password=...` in the query string,
 while driver options such as `iotdb.sqlDialect`/`iotdb.fetchSize` pass through it). TLS
-URLs (`r2dbcs:`) are rejected at configuration time, see the capability matrix.
+URLs (`r2dbcs:`) enable TLS, see the capability matrix.
 
 ## Options
 
@@ -66,7 +66,8 @@ URLs (`r2dbcs:`) are rejected at configuration time, see the capability matrix.
 |-|-|-|-|
 | `host` / `port` | String / Integer | `localhost` / `6667` | Standard SPI options. |
 | `database` | String | none | Sent as the session database (`db`). |
-| `user` / `password` | String | none | Never logged; `toString()` redacts the password. |
+| `user` | String | none | Sent as the session user. |
+| `password` | CharSequence | none | Snapshotted as a String. An omitted password stays absent; an explicitly empty password is sent unchanged. Never inferred from the user name; `toString()` redacts it. |
 | `iotdb.sqlDialect` | String | `table` | `table` or `tree`; the SQL is never rewritten. |
 | `iotdb.timeZone` | String | `UTC` | `LocalDateTime` conversion zone. |
 | `iotdb.protocol` | String | `binary` | Thrift wire protocol: `binary` (`TBinaryProtocol`) or `compact` (`TCompactProtocol`). The server decides which one its client facing RPC service speaks through `dn_rpc_thrift_compression_enable` (ConfigNode: `cn_rpc_thrift_compression_enable`), so client and server must agree: a mismatch fails during the call with `TTransportException: Read call frame size failed`. Verified against a server started with that flag: the same workload (connect, DDL, insert, select, close) needed 1316 bytes with `compact` against 1900 bytes with `binary`, with the same number of round trips. |
@@ -125,11 +126,13 @@ and `deallocatePreparedStatement` (PR #17027, commit `8896075ab1`, 2026-02-06, f
 | Time parameters | `Instant` and `LocalDateTime` are converted to epoch ticks in the session precision (`iotdb.timeZone` resolves `LocalDateTime`); ambiguous DST times and precision loss are rejected. An ISO-8601 string is *not* accepted by the server for a `TIMESTAMP` comparison (`Cannot apply operator: TIMESTAMP < STRING`), so ticks are the only verified form. |
 | Literal parameters | All statements and dialects for the types above; placeholders inside strings and quoted identifiers are never rewritten. In Table SQL, placeholders inside `--` and `/* ... */` comments are also ignored; Tree SQL follows its server grammar, where those forms are not comments. |
 | `DATE` parameters | Not supported: this server version rejects both `DATE < STRING` and `DATE < INT32` comparisons, so binding a `LocalDate` fails at bind time instead of being sent. Rows of a `DATE` column are decoded with the TsFile date encoding. |
+| BLOB results | Default and explicit `ByteBuffer` reads return independent, read-only byte snapshots; `byte[]` reads return copies. Binary parameters remain unsupported. |
+| OBJECT results | Exposed as `VARCHAR`/`String`, using the same object size description as the reference RPC client; native metadata remains `OBJECT`. This describes the server's object reference, and does not download its content. |
 | Connection pool | Verified with `r2dbc-pool` 1.0.2: borrow, `LOCAL` validation, release, lifecycle reset and reuse of the same connection. |
 | Prepared statements | One server side handle per execution; a statement that fails after prepare is deallocated, so the next execution cannot collide with a leaked handle. |
 | Parameters | Zero-based positional indexes as required by the SPI; `io.r2dbc.spi.Parameter` wrappers (used by frameworks) are unwrapped and typed nulls become `bindNull`. |
 | Output parameters | Not supported. `Parameters.out(...)` is rejected at bind time; `Parameters.inOut(...)` is accepted as an input parameter because the SPI type also implements `Parameter.In`, and its output half is ignored, so a caller that expects a returned value gets none. |
-| Batch | Parameter free statements run in order and stop at the first failure; effects of already executed statements are kept. |
+| Batch | Parameter free statements run in order and stop at the first failure; effects of already executed statements are kept. Each `add(sql)` may contain multiple SQL statements, split with the session's Tree/Table quoting and comment rules, with one Result per statement. |
 | Validation | `LOCAL` checks the local session state, `REMOTE` issues a light weight `getProperties` RPC. |
 | Stability | Verified against a live instance: 150 prepared executions in a row without leaking a server side handle, 300 rows paged with `fetchSize=7` without loss or duplication, demand driven consumption, 8 parallel connections sharing one selector runtime and 20 connect/close cycles that release their selector thread. |
 | Backpressure | Pages are fetched only when the current page is exhausted and more rows are demanded. |

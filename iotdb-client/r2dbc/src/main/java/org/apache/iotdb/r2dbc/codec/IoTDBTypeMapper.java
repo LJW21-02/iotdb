@@ -44,6 +44,8 @@ public final class IoTDBTypeMapper {
     R2DBC_TYPES.put(TSDataType.DATE, R2dbcType.DATE);
     R2DBC_TYPES.put(TSDataType.TIMESTAMP, R2dbcType.TIMESTAMP);
     R2DBC_TYPES.put(TSDataType.BLOB, R2dbcType.VARBINARY);
+    // OBJECT cells carry a file reference; expose its size description like the RPC client.
+    R2DBC_TYPES.put(TSDataType.OBJECT, R2dbcType.VARCHAR);
   }
 
   private IoTDBTypeMapper() {}

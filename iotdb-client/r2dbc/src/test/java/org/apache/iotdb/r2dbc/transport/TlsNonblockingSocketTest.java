@@ -19,6 +19,8 @@
 
 package org.apache.iotdb.r2dbc.transport;
 
+import org.apache.iotdb.r2dbc.R2dbcMessages;
+
 import org.apache.thrift.transport.TTransportException;
 import org.junit.Test;
 
@@ -29,6 +31,7 @@ import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLSession;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.ByteBuffer;
@@ -38,6 +41,8 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -266,6 +271,128 @@ public class TlsNonblockingSocketTest {
     }
   }
 
+  @Test
+  public void tlsClosureMessagesUseTheSelectedLocale() throws Exception {
+    assertReadFailure(
+        new ApplicationDataEngine() {
+          @Override
+          public SSLEngineResult.HandshakeStatus getHandshakeStatus() {
+            return SSLEngineResult.HandshakeStatus.NEED_UNWRAP;
+          }
+
+          @Override
+          public SSLEngineResult unwrap(ByteBuffer src, ByteBuffer[] dsts, int offset, int length) {
+            return new SSLEngineResult(
+                SSLEngineResult.Status.CLOSED, SSLEngineResult.HandshakeStatus.NEED_UNWRAP, 0, 0);
+          }
+        },
+        TTransportException.UNKNOWN,
+        R2dbcMessages.EXCEPTION_TLS_CONNECTION_CLOSED_DURING_HANDSHAKE_8EC0DFDC);
+    assertReadFailure(
+        new ApplicationDataEngine() {
+          @Override
+          public SSLEngineResult unwrap(ByteBuffer src, ByteBuffer[] dsts, int offset, int length) {
+            return new SSLEngineResult(
+                SSLEngineResult.Status.CLOSED,
+                SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING,
+                0,
+                0);
+          }
+        },
+        TTransportException.CORRUPTED_DATA,
+        R2dbcMessages.EXCEPTION_TLS_CONNECTION_CLOSED_DURING_UNWRAP_55951C7D);
+    assertReadFailure(
+        new ApplicationDataEngine() {
+          @Override
+          public SSLEngineResult wrap(ByteBuffer[] srcs, int offset, int length, ByteBuffer dst) {
+            return new SSLEngineResult(
+                SSLEngineResult.Status.CLOSED, SSLEngineResult.HandshakeStatus.NEED_WRAP, 0, 0);
+          }
+        },
+        TTransportException.UNKNOWN,
+        R2dbcMessages.EXCEPTION_TLS_CONNECTION_CLOSED_DURING_WRAP_6C905D58);
+  }
+
+  @Test
+  public void handshakeFailureMessagesUseTheSelectedLocale() throws Exception {
+    assertReadFailure(
+        new ApplicationDataEngine() {
+          @Override
+          public SSLEngineResult wrap(ByteBuffer[] srcs, int offset, int length, ByteBuffer dst) {
+            return new SSLEngineResult(
+                SSLEngineResult.Status.OK, SSLEngineResult.HandshakeStatus.NEED_WRAP, 0, 0);
+          }
+        },
+        TTransportException.UNKNOWN,
+        R2dbcMessages.EXCEPTION_TLS_HANDSHAKE_MADE_NO_PROGRESS_WHILE_WRAPPING_B751672A);
+    assertReadFailure(
+        new ApplicationDataEngine() {
+          @Override
+          public SSLEngineResult.HandshakeStatus getHandshakeStatus() {
+            return SSLEngineResult.HandshakeStatus.NEED_UNWRAP_AGAIN;
+          }
+        },
+        TTransportException.UNKNOWN,
+        String.format(
+            R2dbcMessages.EXCEPTION_UNSUPPORTED_TLS_HANDSHAKE_STATUS_ARG_814D493F,
+            SSLEngineResult.HandshakeStatus.NEED_UNWRAP_AGAIN));
+  }
+
+  @Test
+  public void defensiveTransportMessagesUseTheSelectedLocale() throws Exception {
+    try (SocketChannel channel = SocketChannel.open()) {
+      TlsNonblockingSocket transport =
+          new TlsNonblockingSocket(1024, DEFAULT_CONTEXT.createSSLEngine(), channel, null);
+      TTransportException unsupported = assertThrows(TTransportException.class, transport::open);
+      assertEquals(
+          R2dbcMessages.EXCEPTION_OPEN_IS_NOT_IMPLEMENTED_FOR_TLSNONBLOCKINGSOCKET_C4F57ED3,
+          unsupported.getMessage());
+
+      // This defensive branch requires a pending ciphertext write and a caller replacing its
+      // plaintext source with a shorter buffer. Set that state directly to avoid OS buffer timing.
+      Field handshakeComplete = TlsNonblockingSocket.class.getDeclaredField("handshakeComplete");
+      handshakeComplete.setAccessible(true);
+      handshakeComplete.setBoolean(transport, true);
+      Field unacknowledged =
+          TlsNonblockingSocket.class.getDeclaredField("encryptedButUnacknowledged");
+      unacknowledged.setAccessible(true);
+      unacknowledged.setInt(transport, 2);
+      TTransportException replaced =
+          assertThrows(TTransportException.class, () -> transport.write(ByteBuffer.allocate(1)));
+      assertEquals(TTransportException.CORRUPTED_DATA, replaced.getType());
+      assertEquals(
+          R2dbcMessages.EXCEPTION_WRITE_BUFFER_REPLACED_WHILE_DATA_WAS_PENDING_60A9DCFA,
+          replaced.getMessage());
+    }
+  }
+
+  private static void assertReadFailure(SSLEngine engine, int type, String message)
+      throws Exception {
+    try (ServerSocket server = new ServerSocket(0);
+        SocketChannel channel = SocketChannel.open(server.getLocalSocketAddress());
+        Socket peer = server.accept()) {
+      channel.configureBlocking(false);
+      // A real TCP byte makes the handshake/unwrap branches reachable; the test engine controls
+      // only the TLS result, so every assertion exercises the production exception wrapping.
+      peer.getOutputStream().write(1);
+      peer.getOutputStream().flush();
+      TlsNonblockingSocket transport = new TlsNonblockingSocket(1024, engine, channel, null);
+      TTransportException failure = null;
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while (failure == null && System.nanoTime() < deadline) {
+        try {
+          transport.read(ByteBuffer.allocate(1));
+        } catch (TTransportException e) {
+          failure = e;
+        }
+        Thread.yield();
+      }
+      assertNotNull("expected a transport error", failure);
+      assertEquals(type, failure.getType());
+      assertEquals(message, failure.getMessage());
+    }
+  }
+
   private static SSLContext defaultContext() {
     try {
       return SSLContext.getDefault();
@@ -430,7 +557,7 @@ public class TlsNonblockingSocketTest {
     }
   }
 
-  private static final class ApplicationDataEngine extends SSLEngine {
+  private static class ApplicationDataEngine extends SSLEngine {
     private final SSLEngine delegate = DEFAULT_CONTEXT.createSSLEngine();
     private final boolean noProgressOnce;
     private boolean handshakeComplete;

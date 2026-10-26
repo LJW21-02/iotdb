@@ -29,6 +29,7 @@ import org.apache.tsfile.common.conf.TSFileConfig;
 import org.apache.tsfile.enums.TSDataType;
 import org.apache.tsfile.read.common.block.TsBlock;
 import org.apache.tsfile.utils.Binary;
+import org.apache.tsfile.utils.BytesUtils;
 import org.apache.tsfile.utils.DateUtils;
 
 import java.nio.ByteBuffer;
@@ -122,6 +123,8 @@ public final class IoTDBRow implements Row {
         return fromTicks(column.getLong(rowIndex), dataType, requestedType);
       case BLOB:
         return fromBinary(column.getBinary(rowIndex), requestedType);
+      case OBJECT:
+        return fromObjectReference(column.getBinary(rowIndex), requestedType);
       case BOOLEAN:
         return convertPrimitive(column.getBoolean(rowIndex), dataType, requestedType);
       case INT32:
@@ -167,7 +170,8 @@ public final class IoTDBRow implements Row {
 
   private static Object fromBinary(Binary binary, Class<?> requestedType) {
     if (Object.class.equals(requestedType) || ByteBuffer.class.equals(requestedType)) {
-      return ByteBuffer.wrap(binary.getValues());
+      return ByteBuffer.wrap(Arrays.copyOf(binary.getValues(), binary.getLength()))
+          .asReadOnlyBuffer();
     }
     if (byte[].class.equals(requestedType)) {
       return Arrays.copyOf(binary.getValues(), binary.getLength());
@@ -189,6 +193,19 @@ public final class IoTDBRow implements Row {
       return ((Float) value).doubleValue();
     }
     throw cannotConvert(dataType, requestedType);
+  }
+
+  private static String fromObjectReference(Binary binary, Class<?> requestedType) {
+    if (!Object.class.equals(requestedType) && !String.class.equals(requestedType)) {
+      throw cannotConvert(TSDataType.OBJECT, requestedType);
+    }
+    byte[] reference = binary.getValues();
+    // The first long is the object size; the remaining bytes encode its server-side path.
+    if (binary.getLength() < Long.BYTES || BytesUtils.bytesToLong(reference, Long.BYTES) < 0) {
+      throw new IoTDBR2dbcException(
+          R2dbcMessages.EXCEPTION_INVALID_OBJECT_REFERENCE_RETURNED_BY_IOTDB_D4D87374);
+    }
+    return BytesUtils.parseObjectByteArrayToString(reference);
   }
 
   private static Object convertText(String value, Class<?> requestedType) {

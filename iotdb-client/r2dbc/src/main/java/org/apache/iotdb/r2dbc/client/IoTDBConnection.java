@@ -482,18 +482,25 @@ public final class IoTDBConnection implements Connection, Lifecycle {
       statementActive.set(false);
       return IoTDBResult.empty();
     }
-    IoTDBQueryCursor cursor =
-        IoTDBQueryCursor.from(
-            this,
-            sql,
-            response,
-            effectiveFetchSize(fetchSize),
-            preparedStatementName,
-            scheduler,
-            timeFactor,
-            configuration.zoneId());
-    activeCursor = cursor;
-    return IoTDBResult.of(cursor);
+    try {
+      IoTDBQueryCursor cursor =
+          IoTDBQueryCursor.from(
+              this,
+              sql,
+              response,
+              effectiveFetchSize(fetchSize),
+              preparedStatementName,
+              scheduler,
+              timeFactor,
+              configuration.zoneId());
+      activeCursor = cursor;
+      return IoTDBResult.of(cursor);
+    } catch (RuntimeException error) {
+      // Invalid result metadata leaves no registered cursor to release its query/prepared
+      // handles. Close the session transport rather than retaining unowned server resources.
+      abort();
+      throw error;
+    }
   }
 
   /**
