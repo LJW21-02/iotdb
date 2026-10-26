@@ -66,6 +66,20 @@ expose its configured Tree/Table mode to Spring's resolver; the resolver cannot 
 that was explicitly configured with the Tree dialect. This integration does not translate
 relational queries into Tree paths.
 
+With Boot's default factory creation, this artifact also owns the underlying IoTDB driver's shared
+runtime. Closing the application context first disposes Boot's connection pool and then closes the
+driver's selector and scheduler; the same cleanup applies when pooling is disabled or context
+initialization fails after factory creation. Applications must stop and finish their work before
+closing the context. Boot dependencies used by this integration are optional for applications that
+use Spring without Boot.
+
+A user-supplied `ConnectionFactory` bean remains under the application's lifecycle policy. When
+creating a pool manually, expose its driver as a separate `@Bean(destroyMethod = "close")`, create
+the pool from that driver bean, and declare the pool with `@Bean(destroyMethod = "dispose")`.
+Spring's bean dependency ordering then disposes the pool before the driver. A pool's `dispose()`
+alone does not close the delegate driver's runtime; external shared factories must be closed by
+their external owner after every user has finished.
+
 ## Query repositories and explicit writes
 
 An entity can map an application-assigned time id when its table has no TAG columns. The default
@@ -133,7 +147,7 @@ writes are the supported repository contract; it does not claim full reactive CR
 From the repository root, build the new module and reactor dependencies:
 
 ```bash
-mvn test -pl iotdb-client/r2dbc-spring-data -am -Dtest=IoTDBDialectTest -Dsurefire.failIfNoSpecifiedTests=false
+mvn test -pl iotdb-client/r2dbc-spring-data -am -Dtest=IoTDBDialectTest,IoTDBConnectionFactoryLifecycleTest -Dsurefire.failIfNoSpecifiedTests=false
 mvn test -pl iotdb-client/r2dbc-spring-data -am -Dtest=IoTDBSpringDataRepositoryIT -Dsurefire.failIfNoSpecifiedTests=false \
   -Diotdb.it.host=127.0.0.1 -Diotdb.it.port=6667 \
   -Diotdb.it.user=USER -Diotdb.it.password=PASSWORD
@@ -141,10 +155,10 @@ mvn test -pl iotdb-client/r2dbc-spring-data -am -Dtest=IoTDBSpringDataRepository
 
 `IoTDBDialectTest` verifies both resolver registrations without connecting, zero-based/repeated
 anonymous marker bindings, pagination, identifier processing, unsupported arrays and rejected row
-locks. `IoTDBSpringDataRepositoryIT` is skipped unless `iotdb.it.host` is supplied. It starts the Boot
+locks. `IoTDBConnectionFactoryLifecycleTest` checks default Boot pooling and no-pool wrappers,
+context isolation, repeated close, failed initialization and user-factory ownership without a
+server. `IoTDBSpringDataRepositoryIT` is skipped unless `iotdb.it.host` is supplied. It starts the Boot
 starter's automatic configuration against the live server, then checks explicit inserts, entity
 mapping, derived parameter binding, counts, two pages, repeated named parameters, default
-DatabaseClient named binding, empty raw driver DML count streams (before Spring count aggregation), explicit deletion and error
-propagation.
-It disables pooling for this deterministic lifecycle fixture and closes the driver factory after
-connections and context; it does not assert that a pool owns the delegate driver's shared runtime.
+DatabaseClient named binding, empty raw driver DML count streams (before Spring count aggregation),
+explicit deletion and error propagation. It uses Boot's pool and automatic context cleanup.

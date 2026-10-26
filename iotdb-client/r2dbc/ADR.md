@@ -147,18 +147,18 @@ mvn test -pl iotdb-client/r2dbc -Dtest='IoTDBR2dbcBenchmarkIT,IoTDBR2dbcSoakIT' 
 mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcTlsIT -Diotdb.it.tls.port=... -Diotdb.it.tls.trustStore=...
 
 # the benchmark IT measures all four arms, including the blocking transport with the driver codec
-# the RTT arms put .r2dbc-validation/rtt_proxy.py (delay per chunk) in front of the server
-# .r2dbc-validation/frame_proxy.py counts frames and chunks per connection for one arm at a time
-# .r2dbc-validation/stall_proxy.py keeps the socket open but stops answering, for the timeout case:
-mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcSoakIT     -Diotdb.it.stallProxy=.../.r2dbc-validation/stall_proxy.py -Diotdb.it.host=... ...
-# the cleanup budget bounds close(); both cases need the stalling helper, which keeps the socket
-# open but silent, with -Diotdb.it.stallProxy=.../.r2dbc-validation/stall_proxy.py:
+# the RTT and stall helpers below are historical validation materials; the tracked acceptance
+# entry point is iotdb-client/r2dbc/src/test/scripts/run_acceptance.py.
+# The tracked silent-server helper is iotdb-client/r2dbc/src/test/scripts/stall_proxy.py:
+mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcSoakIT \
+    -Diotdb.it.stallProxy=iotdb-client/r2dbc/src/test/scripts/stall_proxy.py -Diotdb.it.host=... ...
+# the cleanup budget bounds close(); both cases use the tracked silent helper:
 mvn test -pl iotdb-client/r2dbc -Dtest='IoTDBR2dbcSoakIT#closingAConnectionWithASilentServerStaysWithinTheCleanupTimeout+abandoningAResultWithASilentServerDestroysTheConnection' ...
-# the redirect cases need a 1C3D cluster (.r2dbc-validation/Start-Cluster.ps1) and rtt_proxy.py:
-mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcClusterIT -Diotdb.it.cluster.ports=16667,16668,16669     -Diotdb.it.cluster.proxy=.../.r2dbc-validation/rtt_proxy.py ...
-# .r2dbc-validation/PageTimeoutProbe.java drives the page phase timeout A/B (slow consumer plus a
-# server query budget just above the first page); run it with the driver classes of the build under
-# test in front of the distribution lib/* of the matching server, not with locally resolved snapshots
+# the redirect cases need a 1C3D cluster; run the tracked acceptance fixture in cluster mode:
+python iotdb-client/r2dbc/src/test/scripts/run_acceptance.py \
+    --distribution path/to/apache-iotdb-2.0.11-all-bin --run-root target/r2dbc-acceptance --mode cluster
+# Page-phase timeout A/B evidence is retained in the validation archive and is not a standalone
+# clone-and-run helper in this checkout.
 # JFR recording of the mixed workload
 mvn test -pl iotdb-client/r2dbc -Dtest='IoTDBR2dbcBenchmarkIT,IoTDBR2dbcSoakIT' \
     -DargLine="-XX:StartFlightRecording=filename=run.jfr,settings=profile,dumponexit=true"

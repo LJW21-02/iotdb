@@ -35,6 +35,7 @@ import reactor.core.publisher.Mono;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -309,11 +310,23 @@ public class IoTDBR2dbcClusterIT {
     Connection victim = null;
     Connection survivor = null;
     boolean stopAttempted = false;
+    Throwable primary = null;
     try {
       victim = Mono.from(victimFactory.create()).block(Duration.ofSeconds(15));
       survivor = Mono.from(survivorFactory.create()).block(Duration.ofSeconds(15));
       assertTrue(serverVersion(victim) > 0);
       assertTrue(serverVersion(survivor) > 0);
+      execute(victim, "CREATE DATABASE IF NOT EXISTS " + DATABASE);
+      execute(
+          victim,
+          "CREATE TABLE IF NOT EXISTS "
+              + DATABASE
+              + ".recovery_probe(device STRING TAG, v INT32 FIELD)");
+      execute(victim, "DELETE FROM " + DATABASE + ".recovery_probe");
+      execute(
+          victim,
+          "INSERT INTO " + DATABASE + ".recovery_probe(time,device,v) VALUES (1,'recovery',101)");
+      assertEquals(List.of(101), recoveryValues(victim));
       stopAttempted = true;
       controlFixtureNode("kill-node");
 
@@ -324,26 +337,112 @@ public class IoTDBR2dbcClusterIT {
       assertThrows(RuntimeException.class, () -> serverVersion(stoppedConnection));
       assertTrue(serverVersion(survivor) > 0);
       assertTrue(Mono.from(survivor.validate(ValidationDepth.REMOTE)).block());
+      controlFixtureNode("restart-node");
+      stopAttempted = false;
+      assertNodeRecovered(ports);
+    } catch (Exception | Error error) {
+      primary = error;
+      throw error;
     } finally {
       try {
-        Mono.whenDelayError(
-                victim == null ? Mono.empty() : Mono.from(victim.close()),
-                survivor == null ? Mono.empty() : Mono.from(survivor.close()))
-            .block(Duration.ofSeconds(15));
-      } finally {
         try {
-          victimFactory.close();
+          Mono.whenDelayError(
+                  victim == null ? Mono.empty() : Mono.from(victim.close()),
+                  survivor == null ? Mono.empty() : Mono.from(survivor.close()))
+              .block(Duration.ofSeconds(15));
         } finally {
           try {
-            survivorFactory.close();
+            victimFactory.close();
           } finally {
-            if (stopAttempted) {
-              controlFixtureNode("restart-node");
+            try {
+              survivorFactory.close();
+            } finally {
+              if (stopAttempted) {
+                controlFixtureNode("restart-node");
+              }
             }
           }
         }
+      } catch (Exception | Error cleanup) {
+        if (primary != null) {
+          primary.addSuppressed(cleanup);
+        } else {
+          throw cleanup;
+        }
       }
     }
+  }
+
+  private static List<Integer> recoveryValues(Connection connection) {
+    return Flux.from(
+            connection
+                .createStatement("SELECT v FROM " + DATABASE + ".recovery_probe ORDER BY time")
+                .execute())
+        .concatMap(result -> result.map((row, metadata) -> row.get("v", Integer.class)))
+        .collectList()
+        .block(Duration.ofSeconds(15));
+  }
+
+  /**
+   * A listening socket is only the start: authenticate, rejoin, read old data and write new data.
+   */
+  private static void assertNodeRecovered(List<Integer> ports) throws Exception {
+    long deadline = System.nanoTime() + Duration.ofSeconds(90).toNanos();
+    Throwable last = null;
+    while (System.nanoTime() < deadline) {
+      try (IoTDBR2dbcConnectionFactory recoveredFactory =
+              (IoTDBR2dbcConnectionFactory) factory(ports.get(2));
+          IoTDBR2dbcConnectionFactory observerFactory =
+              (IoTDBR2dbcConnectionFactory) factory(ports.get(0))) {
+        Connection recovered = Mono.from(recoveredFactory.create()).block(Duration.ofSeconds(15));
+        Connection observer = null;
+        try {
+          observer = Mono.from(observerFactory.create()).block(Duration.ofSeconds(15));
+          assertTrue(
+              Mono.from(recovered.validate(ValidationDepth.REMOTE)).block(Duration.ofSeconds(15)));
+          List<Boolean> membership =
+              Flux.from(observer.createStatement("SHOW CLUSTER DETAILS").execute())
+                  .concatMap(
+                      result ->
+                          result.map(
+                              (row, metadata) ->
+                                  "DataNode".equals(row.get("NodeType", String.class))
+                                      && "Running".equals(row.get("Status", String.class))
+                                      && Integer.toString(ports.get(2))
+                                          .equals(row.get("RpcPort", String.class))))
+                  .collectList()
+                  .block(Duration.ofSeconds(15));
+          assertTrue("restarted DataNode must rejoin as Running", membership.contains(true));
+          List<Integer> old = recoveryValues(recovered);
+          assertTrue("pre-stop row must remain readable", !old.isEmpty() && old.get(0) == 101);
+          execute(
+              recovered,
+              "INSERT INTO "
+                  + DATABASE
+                  + ".recovery_probe(time,device,v) VALUES (2,'recovery',202)");
+          assertEquals(List.of(101, 202), recoveryValues(recovered));
+          assertEquals(List.of(101, 202), recoveryValues(observer));
+          // Written only after every assertion. The runner also requires this exact JUnit method
+          // to pass before accepting the recovery evidence and advancing the fixture state.
+          Files.writeString(
+              Path.of(System.getProperty("iotdb.it.cluster.recoveryEvidence")),
+              "{\"rpcPort\":"
+                  + ports.get(2)
+                  + ",\"authenticated\":true,\"remoteValidated\":true,\"rejoinedRunning\":true,\"beforeValue\":101,\"afterValue\":202}\n");
+          return;
+        } finally {
+          Mono.whenDelayError(
+                  Mono.from(recovered.close()),
+                  observer == null ? Mono.empty() : Mono.from(observer.close()))
+              .block(Duration.ofSeconds(15));
+        }
+      } catch (Exception | AssertionError error) {
+        last = error;
+        Thread.sleep(500);
+      }
+    }
+    throw new AssertionError(
+        "restarted DataNode did not pass authenticated cluster/data recovery", last);
   }
 
   private static int serverVersion(Connection connection) {

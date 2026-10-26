@@ -145,10 +145,9 @@ public final class ParameterBinding {
 
   /** Whether the typed prepare path knows how to encode this parameter. */
   public boolean supportsTypedEncoding() {
-    if (nullValue) {
-      return true;
-    }
-    return !(value instanceof BigDecimal);
+    // A typed null must follow the same path as a non-null value of its declared type.
+    // BigDecimal has no server-side parameter type, including when its value is SQL NULL.
+    return !BigDecimal.class.equals(nullValue ? declaredType : value.getClass());
   }
 
   /** Renders the parameter as a SQL literal for the fallback path. */

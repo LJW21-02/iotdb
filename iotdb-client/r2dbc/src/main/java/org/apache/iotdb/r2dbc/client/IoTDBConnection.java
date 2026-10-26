@@ -255,7 +255,7 @@ public final class IoTDBConnection implements Connection, Lifecycle {
           }
           // The previous result was already released; its cleanup is queued, so wait for it
           // instead of failing the next statement.
-          return Mono.fromCompletionStage(cleanupTail)
+          return Mono.fromFuture(cleanupTail, true)
               .then(
                   Mono.defer(
                       () ->
@@ -471,9 +471,16 @@ public final class IoTDBConnection implements Connection, Lifecycle {
         .then();
   }
 
-  /** Frees a handle whose statement already failed; a further failure has nothing to report. */
+  /** Bounds failed-statement cleanup while preserving the original execution error. */
   private Mono<Void> discardPreparedStatement(String statementName) {
-    return releasePreparedStatement(statementName).onErrorResume(ignored -> Mono.empty());
+    return releasePreparedStatement(statementName)
+        .timeout(configuration.cleanupTimeout())
+        .onErrorResume(
+            error -> {
+              LOGGER.warn(R2dbcMessages.LOG_CLEANING_UP_THE_QUERY_HANDLE_FAILED_DE915B4D, error);
+              abort();
+              return Mono.empty();
+            });
   }
 
   private IoTDBResult buildResult(
@@ -558,7 +565,9 @@ public final class IoTDBConnection implements Connection, Lifecycle {
           previous.handle((value, error) -> (Void) null).thenCompose(ignored -> rpc.apply(client));
       rpcTail = future.handle((value, error) -> (Void) null);
     }
-    return Mono.fromCompletionStage(future);
+    // A subscriber can stop waiting, but it cannot cancel a Thrift request already on the wire.
+    // Keep the queue tied to the transport callback, including validation and pool release waits.
+    return Mono.fromFuture(future, true);
   }
 
   /** Creates a transport for one endpoint; TLS uses the same configuration for the new host. */
@@ -772,8 +781,12 @@ public final class IoTDBConnection implements Connection, Lifecycle {
             return Mono.just(true);
           }
           return call(client -> client.getProperties())
-              .map(properties -> true)
-              .onErrorResume(error -> Mono.just(false))
+              .map(properties -> open.get())
+              .onErrorResume(
+                  error -> {
+                    abort();
+                    return Mono.just(false);
+                  })
               .defaultIfEmpty(false);
         });
   }
@@ -832,8 +845,8 @@ public final class IoTDBConnection implements Connection, Lifecycle {
       requests = rpcTail;
       cleanup = cleanupTail;
     }
-    return Mono.fromCompletionStage(requests)
-        .then(Mono.fromCompletionStage(cleanup))
+    return Mono.fromFuture(requests, true)
+        .then(Mono.fromFuture(cleanup, true))
         .then(
             Mono.fromRunnable(
                 () -> {

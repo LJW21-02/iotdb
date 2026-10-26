@@ -111,13 +111,14 @@ codes), not inferred from release dates:
 |-|-|-|-|-|
 | 1.3.x (checked `v1.3.7`) | no | not usable | required RPCs present, **not tested** | 1.x has no table model |
 | 2.0.2 - 2.0.8 (each of `v2.0.2` ... `v2.0.8` checked) | yes | **fails with `Invalid method name: 'prepareStatement'`** | required RPCs present, **not tested** | table model present, prepare RPCs absent |
-| 2.0.10, 2.0.11 | yes | yes | required RPCs present, **not tested** | prepare RPCs appear in 2.0.10 |
-| 2.0.11-SNAPSHOT (base commit `1151ba762ff82ab377071e69664de6b6d3f30328`) | yes | yes | yes | **the only version tested end to end** (single node + 1C3D, plaintext + TLS) |
+| 2.0.10 | yes | yes | required RPCs present, **not tested end to end** | prepare RPCs appear in 2.0.10 |
+| 2.0.11 | yes | yes | yes | **verified end to end** against the official `apache-iotdb-2.0.11-all-bin`: 1C1D plaintext/TLS and 1C3D plaintext |
+| 2.0.11-SNAPSHOT (this branch build) | yes | yes | yes | verified against the branch distribution with the same plain/TLS/cluster acceptance suites |
 
 - 2.0.9 was never released: the tags jump from `v2.0.8` to `v2.0.10`.
-- Only the base revision was tested end to end. For the other versions only the presence of the
-  required RPCs in that version's code was checked, so "not tested" means the version may still lack
-  a capability the driver relies on.
+- 2.0.11 is the only released version covered by the complete live acceptance matrix in this
+  repository. For the other versions, "not tested end to end" means the version may still lack a
+  capability the driver relies on even when the required RPC names are present.
 - To check a server: run a table model query with a bound parameter (`Invalid method name:
   'prepareStatement'` means the server predates 2.0.10), or read the version the driver reports
   (`ConnectionMetadata.getDatabaseVersion()`).
@@ -134,7 +135,7 @@ and `deallocatePreparedStatement` (PR #17027, commit `8896075ab1`, 2026-02-06, f
 | Table model, `SELECT` / `INSERT` / DDL | Supported, verified end to end on the server revision listed above. |
 | Tree model queries and writes | Supported; the time column is exposed as `Time` (`TIMESTAMP`), the default `LocalDateTime`, with `get(..., Long.class)`/`get(..., Instant.class)` for raw ticks and instants. |
 | Typed parameters | Table model queries with `String`, `Boolean`, `Byte`/`Short`/`Integer`, `Long`, `Float`, `Double` and `Instant`/`LocalDateTime`, using the server side prepare RPC. |
-| Time parameters | `Instant` and `LocalDateTime` are converted to epoch ticks in the session precision (`iotdb.timeZone` resolves `LocalDateTime`); ambiguous DST times and precision loss are rejected. An ISO-8601 string is *not* accepted by the server for a `TIMESTAMP` comparison (`Cannot apply operator: TIMESTAMP < STRING`), so ticks are the only verified form. |
+| Time parameters | `Instant` and `LocalDateTime` are supported and converted to epoch ticks in the session precision (`iotdb.timeZone` resolves `LocalDateTime`); ambiguous DST times and precision loss are rejected. `LocalDate`, `LocalTime`, ISO-8601 timestamp strings and binary input are not supported parameter forms. |
 | Literal parameters | All statements and dialects for the types above; placeholders inside strings and quoted identifiers are never rewritten. In Table SQL, placeholders inside `--` and `/* ... */` comments are also ignored; Tree SQL follows its server grammar, where those forms are not comments. |
 | `DATE` parameters | Not supported: this server version rejects both `DATE < STRING` and `DATE < INT32` comparisons, so binding a `LocalDate` fails at bind time instead of being sent. Rows of a `DATE` column are decoded with the TsFile date encoding. |
 | BLOB results | Default and explicit `ByteBuffer` reads return independent, read-only byte snapshots; `byte[]` reads return copies. Binary parameters remain unsupported. |
@@ -199,7 +200,10 @@ mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcIT -DfailIfNoTests=false \
     -Diotdb.it.user=<user> -Diotdb.it.password=<password>
 
 # Soak and timeout suites (the unresponsive server case needs the stalling proxy helper)
-mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcSoakIT -DfailIfNoTests=false     -Diotdb.it.host=127.0.0.1 -Diotdb.it.port=6667     -Diotdb.it.user=<user> -Diotdb.it.password=<password>     -Diotdb.it.stallProxy=<path to the validation helper>/stall_proxy.py
+mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcSoakIT -DfailIfNoTests=false \
+    -Diotdb.it.host=127.0.0.1 -Diotdb.it.port=6667 \
+    -Diotdb.it.user=<user> -Diotdb.it.password=<password> \
+    -Diotdb.it.stallProxy=iotdb-client/r2dbc/src/test/scripts/stall_proxy.py
 
 # Frame guard against a TLS endpoint (skipped without the TLS options)
 mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcTlsIT -DfailIfNoTests=false     -Diotdb.it.host=127.0.0.1 -Diotdb.it.tls.port=6667     -Diotdb.it.user=<user> -Diotdb.it.password=<password>     -Diotdb.it.tls.trustStore=<trust.p12> -Diotdb.it.tls.trustStorePassword=<password>

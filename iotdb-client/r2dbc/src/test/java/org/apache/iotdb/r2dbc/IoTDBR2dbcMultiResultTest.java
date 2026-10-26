@@ -20,11 +20,14 @@
 package org.apache.iotdb.r2dbc;
 
 import org.apache.iotdb.common.rpc.thrift.TSStatus;
+import org.apache.iotdb.r2dbc.client.IoTDBConnection;
 import org.apache.iotdb.r2dbc.exception.IoTDBR2dbcException;
 import org.apache.iotdb.rpc.TSStatusCode;
+import org.apache.iotdb.rpc.stmt.PreparedParameterSerde;
 import org.apache.iotdb.service.rpc.thrift.IClientRPCService;
 import org.apache.iotdb.service.rpc.thrift.ServerProperties;
 import org.apache.iotdb.service.rpc.thrift.TSCloseOperationReq;
+import org.apache.iotdb.service.rpc.thrift.TSExecutePreparedReq;
 import org.apache.iotdb.service.rpc.thrift.TSExecuteStatementReq;
 import org.apache.iotdb.service.rpc.thrift.TSExecuteStatementResp;
 import org.apache.iotdb.service.rpc.thrift.TSFetchResultsReq;
@@ -34,8 +37,10 @@ import org.apache.iotdb.service.rpc.thrift.TSPrepareResp;
 
 import io.r2dbc.spi.Connection;
 import io.r2dbc.spi.ConnectionFactoryOptions;
+import io.r2dbc.spi.Parameters;
 import io.r2dbc.spi.Result;
 import io.r2dbc.spi.ValidationDepth;
+import org.apache.thrift.async.TAsyncClientManager;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.server.TThreadPoolServer;
 import org.apache.thrift.transport.TServerSocket;
@@ -45,14 +50,22 @@ import org.apache.tsfile.read.common.block.TsBlockBuilder;
 import org.apache.tsfile.read.common.block.column.TsBlockSerde;
 import org.junit.Test;
 import org.reactivestreams.Publisher;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 
 import java.lang.reflect.Proxy;
+import java.math.BigDecimal;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -60,8 +73,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.junit.Assert.assertEquals;
@@ -71,6 +87,177 @@ import static org.junit.Assert.assertTrue;
 
 /** Exercises multi-result ordering through real framed Thrift, including asynchronous paging. */
 public class IoTDBR2dbcMultiResultTest {
+
+  @Test
+  public void rejectedPageCallbackReleasesTheCursorWithoutDecodingOnTheSelector() throws Exception {
+    assertRejectedPageCallback(false);
+  }
+
+  @Test
+  public void disposedCallbackSchedulerStillTerminatesAndReleasesTheCursor() throws Exception {
+    assertRejectedPageCallback(true);
+  }
+
+  private static void assertRejectedPageCallback(boolean disposeScheduler) throws Exception {
+    try (Node node = new Node()) {
+      node.invalidFetchedPage = true;
+      IoTDBConnectionConfiguration configuration =
+          IoTDBConnectionConfiguration.from(
+              ConnectionFactoryOptions.builder()
+                  .option(ConnectionFactoryOptions.HOST, "127.0.0.1")
+                  .option(ConnectionFactoryOptions.PORT, node.port)
+                  .option(ConnectionFactoryOptions.USER, "test")
+                  .option(ConnectionFactoryOptions.PASSWORD, "test")
+                  .option(IoTDBConnectionFactoryOptions.RPC_TIMEOUT, Duration.ofSeconds(5))
+                  .build());
+      TAsyncClientManager manager = new TAsyncClientManager();
+      RejectableScheduler scheduler = new RejectableScheduler();
+      CountDownLatch errorStarted = new CountDownLatch(1);
+      CountDownLatch allowErrorReturn = new CountDownLatch(1);
+      CountDownLatch errorReturned = new CountDownLatch(1);
+      AtomicReference<Throwable> failure = new AtomicReference<>();
+      AtomicReference<String> errorThread = new AtomicReference<>();
+      AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
+      List<Integer> values = new CopyOnWriteArrayList<>();
+      IoTDBConnection connection = null;
+      Disposable subscription = null;
+      try {
+        connection =
+            IoTDBConnection.connect(configuration, manager, scheduler).block(Duration.ofSeconds(5));
+        subscription =
+            Flux.from(connection.createStatement("SELECT v FROM probe").fetchSize(1).execute())
+                .concatMap(result -> result.map((row, metadata) -> row.get("v", Integer.class)))
+                .subscribe(
+                    values::add,
+                    error -> {
+                      failure.set(error);
+                      errorThread.set(Thread.currentThread().getName());
+                      errorStarted.countDown();
+                      try {
+                        if (!allowErrorReturn.await(5, TimeUnit.SECONDS)) {
+                          callbackFailure.set(
+                              new AssertionError("Error callback was not released"));
+                        }
+                      } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        callbackFailure.set(e);
+                      } finally {
+                        errorReturned.countDown();
+                      }
+                    });
+        assertTrue(node.firstFetch.await(5, TimeUnit.SECONDS));
+        if (disposeScheduler) {
+          scheduler.dispose();
+        } else {
+          scheduler.reject.set(true);
+        }
+        node.allowFirstFetch.countDown();
+        assertTrue(errorStarted.await(5, TimeUnit.SECONDS));
+        assertEquals(List.of(11), values);
+        assertTrue(failure.get() instanceof IoTDBR2dbcException);
+        assertTrue(failure.get().getCause() instanceof RejectedExecutionException);
+        assertTrue(errorThread.get().startsWith("parallel-"));
+        assertTrue(node.firstClose.await(5, TimeUnit.SECONDS));
+        node.allowFirstClose.countDown();
+        // This RPC uses the same selector while the application's error callback is blocked.
+        assertTrue(
+            Mono.from(connection.validate(ValidationDepth.REMOTE)).block(Duration.ofSeconds(2)));
+        Mono.from(connection.preRelease()).block(Duration.ofSeconds(2));
+        assertEquals(1, node.closes.get());
+      } finally {
+        allowErrorReturn.countDown();
+        node.allowFirstFetch.countDown();
+        node.allowFirstClose.countDown();
+        if (subscription != null) {
+          subscription.dispose();
+        }
+        if (connection != null) {
+          Mono.from(connection.close()).block(Duration.ofSeconds(5));
+        }
+        scheduler.dispose();
+        manager.stop();
+      }
+      assertTrue(errorReturned.await(5, TimeUnit.SECONDS));
+      assertEquals(null, callbackFailure.get());
+    }
+  }
+
+  @Test
+  public void supportedTypedNullsUseTheirWirePathAndKeepTheConnectionReusable() throws Exception {
+    List<Class<?>> nullTypes =
+        List.of(
+            Boolean.class,
+            Byte.class,
+            Short.class,
+            Integer.class,
+            Long.class,
+            Float.class,
+            Double.class,
+            Instant.class,
+            LocalDateTime.class,
+            String.class,
+            CharSequence.class,
+            StringBuilder.class,
+            StringBuffer.class,
+            CharBuffer.class,
+            BigDecimal.class);
+    try (Node node = new Node()) {
+      node.singlePage = true;
+      node.allowFirstClose.countDown();
+      IoTDBConnectionConfiguration configuration =
+          IoTDBConnectionConfiguration.from(
+              ConnectionFactoryOptions.builder()
+                  .option(ConnectionFactoryOptions.HOST, "127.0.0.1")
+                  .option(ConnectionFactoryOptions.PORT, node.port)
+                  .option(ConnectionFactoryOptions.USER, "test")
+                  .option(ConnectionFactoryOptions.PASSWORD, "test")
+                  .option(IoTDBConnectionFactoryOptions.RPC_TIMEOUT, Duration.ofSeconds(5))
+                  .build());
+      try (IoTDBR2dbcConnectionFactory factory = new IoTDBR2dbcConnectionFactory(configuration)) {
+        Connection connection = Mono.from(factory.create()).block(Duration.ofSeconds(5));
+        try {
+          List<Integer> actual = new ArrayList<>();
+          for (Class<?> type : nullTypes) {
+            for (boolean wrapped : List.of(false, true)) {
+              io.r2dbc.spi.Statement statement =
+                  connection.createStatement("SELECT v FROM probe WHERE v = ?");
+              if (wrapped) {
+                statement.bind(0, Parameters.in(type));
+              } else {
+                statement.bindNull(0, type);
+              }
+              actual.addAll(
+                  Flux.from(statement.execute())
+                      .concatMap(
+                          result -> result.map((row, metadata) -> row.get("v", Integer.class)))
+                      .collectList()
+                      .block(Duration.ofSeconds(5)));
+            }
+          }
+          List<Integer> expected = new ArrayList<>();
+          for (int execution = 1; execution <= nullTypes.size() * 2; execution++) {
+            expected.add(execution * 10 + 1);
+          }
+          assertEquals(expected, actual);
+          assertEquals((nullTypes.size() - 1) * 2, node.prepares.get());
+          assertEquals((nullTypes.size() - 1) * 2, node.preparedParameters.size());
+          for (List<PreparedParameterSerde.DeserializedParam> parameters :
+              node.preparedParameters) {
+            assertEquals(1, parameters.size());
+            assertTrue(parameters.get(0).isNull());
+          }
+          assertEquals(
+              List.of("SELECT v FROM probe WHERE v = NULL", "SELECT v FROM probe WHERE v = NULL"),
+              node.executedStatements);
+          assertEquals(nullTypes.size() * 2, node.closes.get());
+          assertTrue(
+              Mono.from(connection.validate(ValidationDepth.REMOTE)).block(Duration.ofSeconds(5)));
+        } finally {
+          Mono.from(connection.close()).block(Duration.ofSeconds(5));
+        }
+      }
+    }
+  }
 
   @Test
   public void batchWaitsForEachQueryAndItsCleanup() throws Exception {
@@ -281,11 +468,43 @@ public class IoTDBR2dbcMultiResultTest {
     return new TsBlockSerde().serialize(builder.build());
   }
 
+  private static final class RejectableScheduler implements Scheduler {
+
+    private final Scheduler delegate = Schedulers.newSingle("r2dbc-page-callback-test");
+    private final AtomicBoolean reject = new AtomicBoolean();
+
+    @Override
+    public Disposable schedule(Runnable task) {
+      if (reject.get()) {
+        throw new RejectedExecutionException("Callback queue is full");
+      }
+      return delegate.schedule(task);
+    }
+
+    @Override
+    public Worker createWorker() {
+      return delegate.createWorker();
+    }
+
+    @Override
+    public void dispose() {
+      delegate.dispose();
+    }
+
+    @Override
+    public boolean isDisposed() {
+      return delegate.isDisposed();
+    }
+  }
+
   private static final class Node implements AutoCloseable {
 
     private final AtomicInteger executions = new AtomicInteger();
     private final AtomicInteger fetches = new AtomicInteger();
     private final AtomicInteger closes = new AtomicInteger();
+    private final AtomicInteger prepares = new AtomicInteger();
+    private final List<List<PreparedParameterSerde.DeserializedParam>> preparedParameters =
+        new CopyOnWriteArrayList<>();
     private final CountDownLatch firstFetch = new CountDownLatch(1);
     private final CountDownLatch allowFirstFetch = new CountDownLatch(1);
     private final CountDownLatch firstClose = new CountDownLatch(1);
@@ -294,6 +513,7 @@ public class IoTDBR2dbcMultiResultTest {
     private final List<String> executedStatements = new CopyOnWriteArrayList<>();
     private volatile boolean singlePage;
     private volatile boolean invalidMapping;
+    private volatile boolean invalidFetchedPage;
     private final ServerSocket socket;
     private final TThreadPoolServer server;
     private final ExecutorService executor;
@@ -324,11 +544,16 @@ public class IoTDBR2dbcMultiResultTest {
                             .setTimestampPrecision("ms")
                             .setThriftMaxFrameSize(24 * 1024 * 1024);
                       case "prepareStatement":
+                        prepares.incrementAndGet();
                         return new TSPrepareResp().setStatus(success()).setParameterCount(1);
                       case "executeStatementV2":
                       case "executePreparedStatement":
                         if (args[0] instanceof TSExecuteStatementReq) {
                           executedStatements.add(((TSExecuteStatementReq) args[0]).getStatement());
+                        } else {
+                          preparedParameters.add(
+                              PreparedParameterSerde.deserialize(
+                                  ((TSExecutePreparedReq) args[0]).bufferForParameters()));
                         }
                         int id = executions.incrementAndGet();
                         completedOperations.add("execute:" + id);
@@ -354,7 +579,11 @@ public class IoTDBR2dbcMultiResultTest {
                         }
                         completedOperations.add("fetch:" + fetchedQuery);
                         return new TSFetchResultsResp(success(), true, true)
-                            .setQueryResult(List.of(page((int) fetchedQuery * 10 + 2)))
+                            .setQueryResult(
+                                List.of(
+                                    invalidFetchedPage
+                                        ? ByteBuffer.wrap(new byte[] {0})
+                                        : page((int) fetchedQuery * 10 + 2)))
                             .setMoreData(false);
                       case "closeOperation":
                         long closedQuery = ((TSCloseOperationReq) args[0]).getQueryId();

@@ -34,6 +34,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 
 import java.nio.ByteBuffer;
 import java.time.ZoneId;
@@ -259,6 +260,9 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
             response -> {
               synchronized (this) {
                 fetching = false;
+                if (cancelled || finished) {
+                  return;
+                }
                 // A page without a result set ends the query, even when the server still reports
                 // moreData; this mirrors the reference session client.
                 moreData = response.isHasResultSet() && response.isMoreData();
@@ -278,12 +282,30 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
             });
   }
 
-  /** Keeps user callbacks and decoding off the shared Thrift selector thread. */
+  /** Keeps page decoding and row callbacks off the shared Thrift selector thread. */
   private void scheduleDrain() {
     try {
       scheduler.schedule(this::drain);
     } catch (RuntimeException e) {
-      drain();
+      synchronized (this) {
+        if (cancelled || finished) {
+          return;
+        }
+        finished = true;
+      }
+      // Rejection must not turn the selector into a page-decoding or row-callback thread.
+      // Release the cursor before reporting failure, even if its callback scheduler is disposed.
+      close();
+      RuntimeException failure = ExceptionMapper.mapPageFailure(e);
+      try {
+        // Error notification only: this shared, fixed-size scheduler never decodes a page.
+        Schedulers.parallel().schedule(() -> sink.error(failure));
+      } catch (RuntimeException terminalRejection) {
+        // During global scheduler shutdown no asynchronous notification lane may remain. Always
+        // terminate the sink rather than retaining an already-released query indefinitely.
+        failure.addSuppressed(terminalRejection);
+        sink.error(failure);
+      }
     }
   }
 
@@ -312,6 +334,8 @@ public final class IoTDBQueryCursor implements Publisher<Row>, AutoCloseable {
       }
       released = true;
       cancelled = true;
+      pages.clear();
+      block = null;
     }
     connection
         .releaseQuery(queryId, preparedStatementName)

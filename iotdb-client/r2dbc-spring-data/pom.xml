@@ -48,7 +48,6 @@
             <groupId>org.apache.iotdb</groupId>
             <artifactId>iotdb-r2dbc</artifactId>
             <version>${project.version}</version>
-            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.springframework.data</groupId>
@@ -78,16 +77,24 @@
             <artifactId>spring-context</artifactId>
         </dependency>
         <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-beans</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-core</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot</artifactId>
             <version>${spring-boot.version}</version>
-            <scope>test</scope>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
             <version>${spring-boot.version}</version>
-            <scope>test</scope>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.projectreactor</groupId>
@@ -101,6 +108,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-r2dbc</artifactId>
             <version>${spring-boot.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.r2dbc</groupId>
+            <artifactId>r2dbc-pool</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -124,10 +136,6 @@
                         <ignoredUnusedDeclaredDependency>org.springframework.boot:spring-boot-starter-data-r2dbc</ignoredUnusedDeclaredDependency>
                     </ignoredUnusedDeclaredDependencies>
                     <ignoredNonTestScopedDependencies>
-                        <!-- Loaded through R2DBC ServiceLoader at runtime; no Spring code links driver classes. -->
-                        <ignoredNonTestScopedDependency>org.apache.iotdb:iotdb-r2dbc</ignoredNonTestScopedDependency>
-                        <!-- Required indirectly by Spring Data at runtime; main integration code does not link context classes. -->
-                        <ignoredNonTestScopedDependency>org.springframework:spring-context</ignoredNonTestScopedDependency>
                         <!-- Spring R2DBC and the driver use these reactive types indirectly at runtime. -->
                         <ignoredNonTestScopedDependency>io.projectreactor:reactor-core</ignoredNonTestScopedDependency>
                         <ignoredNonTestScopedDependency>org.reactivestreams:reactive-streams</ignoredNonTestScopedDependency>

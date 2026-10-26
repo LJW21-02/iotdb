@@ -43,6 +43,15 @@ from verify_tck import verify as verify_tck
 
 SCRIPTS = Path(__file__).resolve().parent
 REPOSITORY = SCRIPTS.parents[4]
+
+
+def maven_command():
+    """Use an explicitly supplied Maven binary for hermetic runners."""
+    configured = os.environ.get("R2DBC_MAVEN")
+    if configured:
+        resolved = shutil.which(configured)
+        return resolved or configured
+    return str(REPOSITORY / ("mvnw.cmd" if os.name == "nt" else "mvnw"))
 JAVA_OPENS = [
     "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED",
     "--add-opens=java.base/java.lang=ALL-UNNAMED",
@@ -52,6 +61,21 @@ JAVA_OPENS = [
     "--add-opens=java.base/java.net=ALL-UNNAMED",
 ]
 EXPECTED_CASES = {
+    "compatibility": {("IoTDBR2dbcCompatibilityIT", name) for name in (
+        "configuredTransportAndTemporalValuesRoundTrip",
+        "serverVersionAndOptionalClientCertificatePolicyAreVerified",
+    )},
+    "long-soak": {("IoTDBR2dbcSoakIT", "sustainedMixedWorkloadKeepsResourcesBounded")},
+    "soak": {("IoTDBR2dbcSoakIT", name) for name in (
+        "repeatedPreparedExecutionsDoNotLeakServerHandles",
+        "pagesThroughManyFetchesWithoutLosingOrRepeatingRows",
+        "slowConsumerReceivesRowsOnDemandAcrossPages",
+        "parallelConnectionsShareOneSelectorRuntime",
+        "connectCloseCyclesReuseOneSelectorThread",
+        "unresponsiveServerFailsWithinTheRpcTimeout",
+        "closingAConnectionWithASilentServerStaysWithinTheCleanupTimeout",
+        "abandoningAResultWithASilentServerDestroysTheConnection",
+    )},
     "plain": {
         ("IoTDBR2dbcIT", name) for name in (
             "tableModelRoundTripWithPagingAndTypedParameters",
@@ -320,16 +344,19 @@ def start(arguments):
     classes.mkdir()
     artifacts = run / "artifacts"
     artifacts.mkdir()
-    ports_reserved = reserve_ports(17 if arguments.mode == "cluster" else 7)
+    cluster = arguments.mode in ("cluster", "tls-cluster")
+    tls = arguments.mode in ("tls", "mtls", "tls-cluster")
+    client_auth = arguments.mode == "mtls"
+    ports_reserved = reserve_ports(17 if cluster else 7)
     ports = [item.getsockname()[1] for item in ports_reserved]
-    state = {"stateFile": str(run / "state.json"), "runDirectory": str(run), "distributionLib": str(lib), "mode": arguments.mode, "ports": ports, "rpcPort": ports[2], "credentials": str(private / "credentials.properties"), "classes": str(classes), "java": java_tool("java"), "nodes": {}, "stage": "preparing"}
+    state = {"stateFile": str(run / "state.json"), "runDirectory": str(run), "distributionLib": str(lib), "mode": arguments.mode, "protocol": getattr(arguments, "protocol", "binary"), "precision": getattr(arguments, "precision", "ms"), "tls": tls, "clientAuth": client_auth, "cluster": cluster, "ports": ports, "rpcPort": ports[2], "credentials": str(private / "credentials.properties"), "classes": str(classes), "java": java_tool("java"), "nodes": {}, "stage": "preparing"}
     save(state)
     print("STATE=" + state["stateFile"], flush=True)
     try:
         credentials = {"username": "r2dbc_" + secrets.token_hex(6), "password": secrets.token_hex(20)}
         write_properties(Path(state["credentials"]), credentials)
         tls_properties = {}
-        if arguments.mode == "tls":
+        if tls:
             tls_password = secrets.token_hex(20)
             tls_env = dict(os.environ, R2DBC_FIXTURE_STORE_PASSWORD=tls_password)
             key_store, trust_store, certificate = private / "server.p12", private / "trust.p12", private / "server.cer"
@@ -339,6 +366,13 @@ def start(arguments):
                 ["-exportcert", "-alias", "fixture", "-keystore", str(key_store), "-storepass:env", "R2DBC_FIXTURE_STORE_PASSWORD", "-file", str(certificate)],
                 ["-importcert", "-noprompt", "-alias", "fixture", "-storetype", "PKCS12", "-keystore", str(trust_store), "-storepass:env", "R2DBC_FIXTURE_STORE_PASSWORD", "-file", str(certificate)],
             ]
+            if client_auth:
+                client_store, client_certificate, server_trust = private / "client.p12", private / "client.cer", private / "server-trust.p12"
+                commands += [
+                    ["-genkeypair", "-alias", "client", "-keyalg", "RSA", "-keysize", "2048", "-validity", "7", "-dname", "CN=r2dbc-fixture-client", "-ext", "EKU=clientAuth", "-storetype", "PKCS12", "-keystore", str(client_store), "-storepass:env", "R2DBC_FIXTURE_STORE_PASSWORD", "-keypass:env", "R2DBC_FIXTURE_STORE_PASSWORD"],
+                    ["-exportcert", "-alias", "client", "-keystore", str(client_store), "-storepass:env", "R2DBC_FIXTURE_STORE_PASSWORD", "-file", str(client_certificate)],
+                    ["-importcert", "-noprompt", "-alias", "client", "-storetype", "PKCS12", "-keystore", str(server_trust), "-storepass:env", "R2DBC_FIXTURE_STORE_PASSWORD", "-file", str(client_certificate)],
+                ]
             with (private / "keytool.log").open("wb") as output:
                 for command in commands:
                     subprocess.run([keytool] + command, env=tls_env, stdout=output, stderr=subprocess.STDOUT, check=True, timeout=60)
@@ -346,6 +380,11 @@ def start(arguments):
             write_properties(Path(state["credentials"]), credentials)
             state["trustStore"] = str(trust_store)
             tls_properties = {"key_store_path": key_store, "key_store_pwd": tls_password}
+            if client_auth:
+                state["keyStore"] = str(client_store)
+                credentials["keyStorePassword"] = tls_password
+                tls_properties.update({"trust_store_path": server_trust, "trust_store_pwd": tls_password})
+                write_properties(Path(state["credentials"]), credentials)
         with (artifacts / "launcher-compile.log").open("wb") as output:
             subprocess.run([java_tool("javac"), "--release", "17", "-cp", str(lib / "*"), "-d", str(classes), str(SCRIPTS / "ServerLauncher.java"), str(SCRIPTS / "FixtureNodeControl.java")], stdout=output, stderr=subprocess.STDOUT, check=True, timeout=60)
         common = {
@@ -355,13 +394,13 @@ def start(arguments):
             "config_node_consensus_protocol_class": "org.apache.iotdb.consensus.simple.SimpleConsensus",
             "schema_region_consensus_protocol_class": "org.apache.iotdb.consensus.simple.SimpleConsensus",
             "data_region_consensus_protocol_class": "org.apache.iotdb.consensus.simple.SimpleConsensus",
-            "cn_rpc_thrift_compression_enable": "false", "dn_rpc_thrift_compression_enable": "false", "dn_rpc_advanced_compression_enable": "false",
-            "timestamp_precision": "ms", "enable_thrift_ssl": str(arguments.mode == "tls").lower(), "thrift_ssl_client_auth": "false",
+            "cn_rpc_thrift_compression_enable": "false", "dn_rpc_thrift_compression_enable": str(state["protocol"] == "compact").lower(), "dn_rpc_advanced_compression_enable": "false",
+            "timestamp_precision": state["precision"], "enable_thrift_ssl": str(tls).lower(), "thrift_ssl_client_auth": str(client_auth).lower(),
             "enable_rest_service": "false", "enable_mqtt_service": "false", "cn_metric_reporter_list": "", "dn_metric_reporter_list": "", "dn_metric_internal_reporter_type": "MEMORY", "max_tsblock_line_number": 128,
         }
         common.update(tls_properties)
         descriptions = [("cn", "org.apache.iotdb.confignode.service.ConfigNode", {"cn_internal_port": ports[0], "cn_consensus_port": ports[1]}, ports[0])]
-        for index in range(3 if arguments.mode == "cluster" else 1):
+        for index in range(3 if cluster else 1):
             part = ports[2 + index * 5:7 + index * 5]
             descriptions.append((f"dn{index + 1}", "org.apache.iotdb.db.service.DataNode", dict(zip(["dn_rpc_port", "dn_internal_port", "dn_mpp_data_exchange_port", "dn_schema_region_consensus_port", "dn_data_region_consensus_port"], part)), part[0]))
         for name, main, properties, ready_port in descriptions:
@@ -389,7 +428,10 @@ def start(arguments):
         state["stage"] = "start-failed"
         save(state)
         # Cleanup never guesses process names; each launched PID is verified.
-        stop(state)
+        try:
+            stop(state)
+        except BaseException as cleanup_error:
+            print("CLEANUP FAILED: " + type(cleanup_error).__name__ + "; original fixture startup failure preserved", file=sys.stderr)
         raise
 
 
@@ -448,9 +490,26 @@ def run_maven(command, output, timeout):
 def run_tests(arguments, state):
     credentials = read_credentials(state)
     suite = arguments.suite
-    base = ["-Diotdb.it.host=127.0.0.1", f"-Diotdb.it.port={state['rpcPort']}", f"-Diotdb.it.user={credentials['username']}", f"-Diotdb.it.password={credentials['password']}", "-Dsurefire.failIfNoSpecifiedTests=false"]
+    base = ["-Diotdb.it.host=127.0.0.1", f"-Diotdb.it.port={state['rpcPort']}", f"-Diotdb.it.user={credentials['username']}", f"-Diotdb.it.password={credentials['password']}", "-Dsurefire.failIfNoSpecifiedTests=true"]
     module, profile = "iotdb-client/r2dbc", None
-    if suite == "plain":
+    if suite == "compatibility":
+        tests = "IoTDBR2dbcCompatibilityIT"
+        base += [f"-Diotdb.it.protocol={state['protocol']}", f"-Diotdb.it.precision={state['precision']}", f"-Diotdb.it.ssl={str(state['tls']).lower()}", f"-Diotdb.it.clientAuth={str(state['clientAuth']).lower()}", "-Diotdb.it.cluster.ports=" + ",".join(map(str, state["clusterPorts"]))]
+        if state["tls"]:
+            base += [f"-Diotdb.it.tls.trustStore={state['trustStore']}", f"-Diotdb.it.tls.trustStorePassword={credentials['trustStorePassword']}"]
+        if state["clientAuth"]:
+            base += [f"-Diotdb.it.tls.keyStore={state['keyStore']}", f"-Diotdb.it.tls.keyStorePassword={credentials['keyStorePassword']}"]
+    elif suite == "soak":
+        if state["mode"] != "plain" or state["protocol"] != "binary" or state["precision"] != "ms":
+            raise ValueError("The full soak suite currently requires plain binary/ms")
+        tests = "IoTDBR2dbcSoakIT#" + "+".join(sorted(method for _, method in EXPECTED_CASES["soak"]))
+        base += [f"-Diotdb.it.stallProxy={SCRIPTS / 'stall_proxy.py'}"]
+    elif suite == "long-soak":
+        if state["mode"] != "plain" or state["protocol"] != "binary" or state["precision"] != "ms" or getattr(arguments, "soak_seconds", 0) <= 0:
+            raise ValueError("Sustained soak requires plain binary/ms and --soak-seconds > 0")
+        tests = "IoTDBR2dbcSoakIT#sustainedMixedWorkloadKeepsResourcesBounded"
+        base += [f"-Diotdb.it.soak.seconds={arguments.soak_seconds}"]
+    elif suite == "plain":
         tests = "IoTDBR2dbcIT,IoTDBR2dbcPoolIT,IoTDBR2dbcObjectIT"
     elif suite == "tls":
         if state["mode"] != "tls":
@@ -463,14 +522,16 @@ def run_tests(arguments, state):
         base += ["-Diotdb.it.cluster.ports=" + ",".join(map(str, state["clusterPorts"])), f"-Diotdb.it.cluster.proxy={SCRIPTS / 'rtt_proxy.py'}", f"-Diotdb.it.cluster.python={sys.executable}"]
         tests = "IoTDBR2dbcClusterIT#dataWrittenThroughOneDataNodeIsReadableFromTheOthers+typedParameterQueryRunsFromAnyDataNode+writesOnEveryDataNodeCompleteWithNoRedirectBudget+brokenConnectionFailsFastAndIsNotReused" if suite == "cluster" else "IoTDBR2dbcClusterIT#stoppedDataNodeInvalidatesItsConnectionWhileAnotherNodeStaysHealthy"
         if suite == "node-loss":
-            base += [f"-Diotdb.it.cluster.fixture={state['stateFile']}", f"-Diotdb.it.cluster.control={SCRIPTS / 'fixture.py'}"]
+            recovery = Path(state["runDirectory"]) / "artifacts/node-recovery.json"
+            recovery.unlink(missing_ok=True)
+            base += [f"-Diotdb.it.cluster.fixture={state['stateFile']}", f"-Diotdb.it.cluster.control={SCRIPTS / 'fixture.py'}", f"-Diotdb.it.cluster.recoveryEvidence={recovery}"]
     elif suite == "tck":
         tests, profile = "IoTDBR2dbcTckTest", "with-r2dbc-tck"
     elif suite == "boot":
         tests, profile = "IoTDBR2dbcSpringBootSampleIT", "with-r2dbc-spring"
     else:
         module, tests = "iotdb-client/r2dbc-spring-data", "IoTDBSpringDataRepositoryIT"
-    maven = [str(REPOSITORY / ("mvnw.cmd" if os.name == "nt" else "mvnw")), "-B", "--no-transfer-progress", "-pl", module]
+    maven = [maven_command(), "-B", "--no-transfer-progress", "-pl", module]
     if arguments.offline:
         maven.append("-o")
     if profile:
@@ -486,9 +547,7 @@ def run_tests(arguments, state):
     artifacts = Path(state["runDirectory"]) / "artifacts"
     log = artifacts / (suite + ".log")
     print("RUNNING suite=" + suite, flush=True)
-    sensitive = [credentials["password"], credentials["username"]]
-    if "trustStorePassword" in credentials:
-        sensitive.append(credentials["trustStorePassword"])
+    sensitive = list(credentials.values())
     try:
         with log.open("wb") as output:
             maven_exit = run_maven(maven, output, arguments.timeout)
@@ -519,6 +578,14 @@ def run_tests(arguments, state):
         if maven_exit != 0:
             raise RuntimeError("Live suite failed; inspect its log")
         summary = verify_live(actual_reports, suite)
+        if suite == "node-loss":
+            proof = json.loads(recovery.read_text(encoding="utf-8"))
+            if proof != {"rpcPort": state["clusterPorts"][2], "authenticated": True, "remoteValidated": True, "rejoinedRunning": True, "beforeValue": 101, "afterValue": 202}:
+                raise RuntimeError("Node-recovery evidence did not match the asserted read/write contract")
+            refreshed = read_state(Path(state["stateFile"]))
+            refreshed["nodes"]["dn3"]["recovery"] = proof
+            refreshed["stage"] = "recovery-verified"
+            save(refreshed)
     (artifacts / (suite + "-summary.json")).write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print("PASSED suite=" + suite + " " + json.dumps(summary, sort_keys=True), flush=True)
 
@@ -529,14 +596,17 @@ def main():
     start_parser = actions.add_parser("start")
     start_parser.add_argument("--distribution", type=Path, required=True)
     start_parser.add_argument("--run-root", type=Path, required=True)
-    start_parser.add_argument("--mode", choices=["plain", "tls", "cluster"], required=True)
+    start_parser.add_argument("--mode", choices=["plain", "tls", "cluster", "mtls", "tls-cluster"], required=True)
+    start_parser.add_argument("--protocol", choices=["binary", "compact"], default="binary")
+    start_parser.add_argument("--precision", choices=["ms", "us", "ns"], default="ms")
     for action in ("stop", "kill-node", "restart-node", "run-tests"):
         command = actions.add_parser(action)
         command.add_argument("--state", type=Path, required=True)
         if action in ("kill-node", "restart-node"):
             command.add_argument("--node", choices=["dn1", "dn2", "dn3"], required=True)
         if action == "run-tests":
-            command.add_argument("--suite", choices=["plain", "tls", "cluster", "node-loss", "tck", "boot", "spring-data"], required=True)
+            command.add_argument("--suite", choices=list(EXPECTED_CASES) + ["tck"], required=True)
+            command.add_argument("--soak-seconds", type=int, default=0)
             command.add_argument("--offline", action="store_true")
             command.add_argument("--timeout", type=int, default=900)
     arguments = parser.parse_args()
@@ -553,7 +623,10 @@ def main():
         if listener(state["nodes"][arguments.node]["listener"]):
             raise RuntimeError("Refusing to restart a listening node")
         start_node(state, arguments.node)
-        print("NODE_RESTARTED=" + arguments.node, flush=True)
+        state["stage"] = "restarted-listener-authentication-pending"
+        state["nodes"][arguments.node].pop("recovery", None)
+        save(state)
+        print("NODE_LISTENING_RECOVERY_PENDING=" + arguments.node, flush=True)
     else:
         run_tests(arguments, state)
 

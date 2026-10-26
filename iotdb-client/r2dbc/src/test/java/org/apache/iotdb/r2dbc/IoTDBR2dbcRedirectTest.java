@@ -51,10 +51,12 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -298,6 +300,157 @@ public class IoTDBR2dbcRedirectTest {
           Mono.from(second.close()).block(Duration.ofSeconds(5));
         }
         assertEquals(null, callbackFailure.get());
+      }
+    }
+  }
+
+  @Test
+  public void cancelingRemoteValidationKeepsTheNextRpcBehindItsActualResponse() throws Exception {
+    assertValidationCancellationKeepsQueue(false);
+  }
+
+  @Test
+  public void cancelingPoolReleaseWaitDoesNotCancelTheSharedRpcBarrier() throws Exception {
+    assertValidationCancellationKeepsQueue(true);
+  }
+
+  private static void assertValidationCancellationKeepsQueue(boolean cancelReleaseWait)
+      throws Exception {
+    try (Node node = new Node();
+        ConnectionContext context = connect(node, "table", Duration.ZERO)) {
+      node.validationReceived = new CountDownLatch(1);
+      node.allowValidationResponse = new CountDownLatch(1);
+      Disposable validation =
+          Mono.from(context.connection.validate(ValidationDepth.REMOTE)).subscribe();
+      try {
+        assertTrue(node.validationReceived.await(5, TimeUnit.SECONDS));
+        validation.dispose();
+        if (cancelReleaseWait) {
+          Mono.from(((io.r2dbc.spi.Lifecycle) context.connection).preRelease())
+              .subscribe()
+              .dispose();
+        }
+        CountDownLatch queryTerminated = new CountDownLatch(1);
+        CompletableFuture<? extends io.r2dbc.spi.Result> next =
+            Mono.from(context.connection.createStatement("SELECT 1").execute())
+                .doFinally(ignored -> queryTerminated.countDown())
+                .toFuture();
+        assertFalse(queryTerminated.await(150, TimeUnit.MILLISECONDS));
+        assertEquals(0, node.statementExecutions.get());
+        node.allowValidationResponse.countDown();
+        org.junit.Assert.assertNotNull(next.get(5, TimeUnit.SECONDS));
+        assertEquals(1, node.statementExecutions.get());
+        assertTrue(Mono.from(context.connection.validate(ValidationDepth.LOCAL)).block());
+      } finally {
+        node.allowValidationResponse.countDown();
+        validation.dispose();
+      }
+    }
+  }
+
+  @Test
+  public void failedRemoteValidationInvalidatesThePhysicalConnection() throws Exception {
+    try (Node node = new Node();
+        ConnectionContext context = connect(node, "table", Duration.ZERO)) {
+      node.failValidation = true;
+      assertFalse(
+          Mono.from(context.connection.validate(ValidationDepth.REMOTE))
+              .block(Duration.ofSeconds(5)));
+      assertFalse(Mono.from(context.connection.validate(ValidationDepth.LOCAL)).block());
+      assertThrows(
+          IllegalStateException.class, () -> context.connection.createStatement("SELECT 1"));
+    }
+  }
+
+  @Test
+  public void remotePoolValidationTimeoutDiscardsThePhysicalConnection() throws Exception {
+    try (Node node = new Node()) {
+      node.validationReceived = new CountDownLatch(1);
+      node.allowValidationResponse = new CountDownLatch(1);
+      IoTDBConnectionConfiguration configuration =
+          IoTDBConnectionConfiguration.from(
+              ConnectionFactoryOptions.builder()
+                  .option(ConnectionFactoryOptions.HOST, "127.0.0.1")
+                  .option(ConnectionFactoryOptions.PORT, node.port)
+                  .option(ConnectionFactoryOptions.USER, "test")
+                  .option(ConnectionFactoryOptions.PASSWORD, "test")
+                  .option(IoTDBConnectionFactoryOptions.CLEANUP_TIMEOUT, Duration.ofMillis(100))
+                  .option(IoTDBConnectionFactoryOptions.RPC_TIMEOUT, Duration.ofSeconds(5))
+                  .build());
+      try (IoTDBR2dbcConnectionFactory factory = new IoTDBR2dbcConnectionFactory(configuration)) {
+        io.r2dbc.pool.ConnectionPool pool =
+            new io.r2dbc.pool.ConnectionPool(
+                io.r2dbc.pool.ConnectionPoolConfiguration.builder(factory)
+                    .initialSize(0)
+                    .maxSize(1)
+                    .acquireRetry(0)
+                    .validationDepth(ValidationDepth.REMOTE)
+                    .maxValidationTime(Duration.ofMillis(100))
+                    .build());
+        try {
+          CompletableFuture<? extends Connection> allocation = Mono.from(pool.create()).toFuture();
+          assertTrue(node.validationReceived.await(5, TimeUnit.SECONDS));
+          assertThrows(
+              java.util.concurrent.ExecutionException.class,
+              () -> allocation.get(3, TimeUnit.SECONDS));
+          node.validationReceived = null;
+          node.allowValidationResponse.countDown();
+          Connection replacement = Mono.from(pool.create()).block(Duration.ofSeconds(5));
+          try {
+            Mono.from(replacement.createStatement("SELECT 1").execute())
+                .block(Duration.ofSeconds(5));
+            assertEquals(2, node.sessions.get());
+            assertEquals(1, node.statementExecutions.get());
+          } finally {
+            Mono.from(replacement.close()).block(Duration.ofSeconds(5));
+          }
+        } finally {
+          node.allowValidationResponse.countDown();
+          pool.disposeLater().block(Duration.ofSeconds(5));
+        }
+      }
+    }
+  }
+
+  @Test
+  public void failedPrepareCleanupUsesItsOwnBudgetAndPreservesTheOriginalError() throws Exception {
+    try (Node node = new Node()) {
+      node.prepareResponse = () -> new TSStatus(701).setMessage("prepare rejected");
+      node.deallocateReceived = new CountDownLatch(1);
+      node.allowDeallocateResponse = new CountDownLatch(1);
+      IoTDBConnectionConfiguration configuration =
+          IoTDBConnectionConfiguration.from(
+              ConnectionFactoryOptions.builder()
+                  .option(ConnectionFactoryOptions.HOST, "127.0.0.1")
+                  .option(ConnectionFactoryOptions.PORT, node.port)
+                  .option(ConnectionFactoryOptions.USER, "test")
+                  .option(ConnectionFactoryOptions.PASSWORD, "test")
+                  .option(IoTDBConnectionFactoryOptions.CLEANUP_TIMEOUT, Duration.ofMillis(100))
+                  .option(IoTDBConnectionFactoryOptions.RPC_TIMEOUT, Duration.ofSeconds(5))
+                  .build());
+      try (IoTDBR2dbcConnectionFactory factory = new IoTDBR2dbcConnectionFactory(configuration)) {
+        Connection connection = Mono.from(factory.create()).block(Duration.ofSeconds(5));
+        try {
+          CompletableFuture<? extends io.r2dbc.spi.Result> execution =
+              Mono.from(
+                      connection
+                          .createStatement("SELECT v FROM probe WHERE v = ?")
+                          .bind(0, 1)
+                          .execute())
+                  .toFuture();
+          assertTrue(node.deallocateReceived.await(5, TimeUnit.SECONDS));
+          java.util.concurrent.ExecutionException failure =
+              assertThrows(
+                  java.util.concurrent.ExecutionException.class,
+                  () -> execution.get(2, TimeUnit.SECONDS));
+          assertTrue(failure.getCause() instanceof io.r2dbc.spi.R2dbcBadGrammarException);
+          assertEquals(701, ((io.r2dbc.spi.R2dbcException) failure.getCause()).getErrorCode());
+          assertEquals(0, node.preparedExecutions.get());
+          assertFalse(Mono.from(connection.validate(ValidationDepth.LOCAL)).block());
+        } finally {
+          node.allowDeallocateResponse.countDown();
+          Mono.from(connection.close()).block(Duration.ofSeconds(5));
+        }
       }
     }
   }
@@ -577,10 +730,16 @@ public class IoTDBR2dbcRedirectTest {
     private volatile CountDownLatch allowStatementResponse;
     private volatile CountDownLatch openSessionReceived;
     private volatile CountDownLatch allowOpenSessionResponse;
+    private volatile CountDownLatch validationReceived;
+    private volatile CountDownLatch allowValidationResponse;
+    private volatile CountDownLatch deallocateReceived;
+    private volatile CountDownLatch allowDeallocateResponse;
+    private volatile boolean failValidation;
     private final CountDownLatch openSessionReturned = new CountDownLatch(1);
     private volatile int prepareParameterCount = 1;
     private volatile Supplier<TSStatus> statementResponse = IoTDBR2dbcRedirectTest::success;
     private volatile Supplier<TSStatus> preparedResponse = IoTDBR2dbcRedirectTest::success;
+    private volatile Supplier<TSStatus> prepareResponse = IoTDBR2dbcRedirectTest::success;
 
     private Node() throws Exception {
       socket = new ServerSocket(0, 16, InetAddress.getLoopbackAddress());
@@ -611,7 +770,14 @@ public class IoTDBR2dbcRedirectTest {
                         statementIdRequests.incrementAndGet();
                         return 1L;
                       case "getProperties":
-                        propertiesRequests.incrementAndGet();
+                        int propertiesCall = propertiesRequests.incrementAndGet();
+                        if (failValidation) {
+                          throw new org.apache.thrift.TException("validation rejected");
+                        }
+                        if (propertiesCall > 1 && validationReceived != null) {
+                          validationReceived.countDown();
+                          allowValidationResponse.await();
+                        }
                         return new ServerProperties()
                             .setVersion("test")
                             .setSupportedTimeAggregationOperations(List.of())
@@ -631,14 +797,19 @@ public class IoTDBR2dbcRedirectTest {
                       case "prepareStatement":
                         prepares.incrementAndGet();
                         return new TSPrepareResp()
-                            .setStatus(success())
+                            .setStatus(prepareResponse.get())
                             .setParameterCount(prepareParameterCount);
                       case "executePreparedStatement":
                         preparedExecutions.incrementAndGet();
                         return new TSExecuteStatementResp().setStatus(preparedResponse.get());
                       case "closeSession":
                       case "closeOperation":
+                        return success();
                       case "deallocatePreparedStatement":
+                        if (deallocateReceived != null) {
+                          deallocateReceived.countDown();
+                          allowDeallocateResponse.await();
+                        }
                         return success();
                       case "toString":
                         return "IoTDBR2dbcRedirectTestNode";

@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 
 from fixture import EXPECTED_CASES, sanitize_report, stop_windows_node, verify_live
+from run_unit import unit_contract, verify_units
 from verify_tck import COUNT_DIFFERENCES, SUPPORTED, TRANSACTION_DIFFERENCES, verify
 
 
@@ -120,6 +121,40 @@ class PublicEvidenceTest(unittest.TestCase):
             ET.ElementTree(root).write(report)
             with self.assertRaises(RuntimeError):
                 verify_live([report], "tls")
+
+
+class UnitGateTest(unittest.TestCase):
+    def test_contract_includes_profile_tests_and_excludes_the_live_tck(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module = Path(directory)
+            for folder, name in (("java", "DriverTest"), ("spring/java", "LifecycleTest"), ("java", "IoTDBR2dbcTckTest")):
+                source = module / "src/test" / folder / (name + ".java")
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("package example; public class " + name + " { @Test public void coversBehavior() {} }", encoding="utf-8")
+            self.assertEqual({("example.DriverTest", "coversBehavior"), ("example.LifecycleTest", "coversBehavior")}, unit_contract(module))
+
+    def test_missing_duplicate_skipped_and_failed_unit_methods_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "unit.xml"
+            expected = {("example.DriverTest", "first"), ("example.DriverTest", "second")}
+            root = ET.Element("testsuite")
+            for class_name, method in sorted(expected):
+                ET.SubElement(root, "testcase", classname=class_name, name=method)
+            def verify_current():
+                ET.ElementTree(root).write(report)
+                return verify_units([report], expected)
+            self.assertEqual(2, verify_current()["passed"])
+            for tag in ("skipped", "failure", "error"):
+                marker = ET.SubElement(root[0], tag)
+                with self.assertRaises(ValueError):
+                    verify_current()
+                root[0].remove(marker)
+            root[1].set("name", root[0].attrib["name"])
+            with self.assertRaises(ValueError):
+                verify_current()
+            root.remove(root[1])
+            with self.assertRaises(ValueError):
+                verify_current()
 
 
 if __name__ == "__main__":

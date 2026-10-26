@@ -67,7 +67,6 @@ public class IoTDBSpringDataRepositoryIT {
   @Test
   public void bootDiscoversTheDialectAndExecutesRepositoriesWithoutFakeCounts() {
     provision();
-    ConnectionFactory factory = null;
     try (ConfigurableApplicationContext context =
         new SpringApplicationBuilder(Application.class)
             .web(WebApplicationType.NONE)
@@ -80,11 +79,11 @@ public class IoTDBSpringDataRepositoryIT {
                     + DATABASE,
                 "spring.r2dbc.username=" + System.getProperty("iotdb.it.user"),
                 "spring.r2dbc.password=" + System.getProperty("iotdb.it.password"),
-                "spring.r2dbc.pool.enabled=false",
+                "spring.r2dbc.pool.initial-size=0",
                 "spring.main.banner-mode=off",
                 "logging.level.root=ERROR")
             .run()) {
-      factory = context.getBean(ConnectionFactory.class);
+      ConnectionFactory factory = context.getBean(ConnectionFactory.class);
       assertSame(IoTDBDialect.INSTANCE, DialectResolver.getDialect(factory));
       assertNotNull(context.getBean(R2dbcEntityTemplate.class));
       DatabaseClient client = context.getBean(DatabaseClient.class);
@@ -137,10 +136,6 @@ public class IoTDBSpringDataRepositoryIT {
       assertEquals(Long.valueOf(3), repository.countByValueGreaterThan(0).block(TIMEOUT));
       assertThrows(
           RuntimeException.class, () -> client.sql("THIS IS NOT SQL").then().block(TIMEOUT));
-    } finally {
-      if (factory instanceof IoTDBR2dbcConnectionFactory) {
-        ((IoTDBR2dbcConnectionFactory) factory).close();
-      }
     }
   }
 
