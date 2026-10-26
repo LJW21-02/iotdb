@@ -18,6 +18,9 @@
 Requirements: JDK 17 or later (`java`, `javac`, and `keytool` on PATH), Python
 3.10 or later, and an all-bin distribution built from this checkout. The Python
 scripts use only the standard library and run on Windows and Linux.
+The examples use `python`; use `python3` where that is the installed command.
+The runner passes its own interpreter to the silent-server proxy, so a separate
+`python` alias is unnecessary.
 
 Build and install the matching server and JDBC/Spring dependencies first:
 
@@ -58,6 +61,10 @@ The cluster has replication factor one. Node loss checks invalidation of the
 stopped node connection, survivor availability, and after restart, authentication,
 REMOTE validation, cluster rejoin, and read/write data recovery. It does not claim
 uninterrupted access to data stored only on the stopped node.
+Fixtures explicitly set `wal_mode=SYNC` on every DataNode: an acknowledged write
+has reached the WAL on disk before the test forcibly terminates the process
+(SIGKILL on Linux). This test configuration supports the subsequent persistence
+assertions.
 
 Individual commands allow local debugging without exposing credentials:
 
@@ -94,10 +101,13 @@ The CI workflow runs each source-declared R2DBC and Spring Data unit-test method
 including Boot lifecycle and dialect tests. Its XML gate rejects missing,
 duplicated, failed, errored, or skipped methods. A manually dispatched workflow
 may enable the sustained mixed workload (`run_soak=true`, `soak_seconds` from 1
-to 5400). It reports statements, rows, heap and driver-thread deltas every 30
-seconds and checks resource bounds. Standard plain acceptance also runs the
-shorter eight-case soak through the tracked silent-server proxy. Measurements are
-specific to that run and host, not general performance guarantees.
+to 5400). On one connection, it repeats paged queries, prepared statements, and
+discarded results; it reports statements, rows, heap and driver-thread deltas
+every 30 seconds and checks resource bounds. Standard plain acceptance also runs
+the shorter eight-case soak, which separately covers eight concurrent connections,
+connect/close cycles, and silent-server timeouts through the tracked proxy.
+Measurements describe the tested workload and host; the sustained single-connection
+run does not establish concurrent production capacity.
 
 Run the gate's negative controls without starting a server:
 

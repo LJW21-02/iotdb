@@ -63,6 +63,11 @@ jobs:
           python-version: "3.12"
       - name: Install matching driver and Spring dependencies
         run: ./mvnw -B --no-transfer-progress -pl iotdb-client/r2dbc-spring-data -am -DskipTests install
+      - name: Resolve published POMs from standalone consumers
+        run: >-
+          python iotdb-client/r2dbc/src/test/scripts/check_consumer_runtime.py
+          --work-dir target/r2dbc-consumer-runtime
+          --summary target/r2dbc-unit/artifacts/consumer-runtime.json
       - name: Run all driver, Spring lifecycle and Dialect unit methods
         run: python iotdb-client/r2dbc/src/test/scripts/run_unit.py --artifacts target/r2dbc-unit/artifacts
       - name: Keep unit evidence

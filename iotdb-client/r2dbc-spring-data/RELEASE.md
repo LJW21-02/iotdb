@@ -35,13 +35,34 @@ every JAR SHA-512 to an SPDX license expression and at least one verified licens
 the source may be an embedded `jar:META-INF/LICENSE...` member or a repository file using
 `repo:path/to/file`.
 
+Before accepting these inputs, resolve the installed/published POMs from independent consumers:
+
+```powershell
+python ..\r2dbc\src\test\scripts\check_consumer_runtime.py `
+  --work-dir ..\..\target\r2dbc-consumer-runtime `
+  --summary ..\..\target\r2dbc-consumer-runtime-summary.json
+```
+
+The work directory and summary must be new. `--maven`, `--local-repo` and `--offline` select the
+resolver executable, dependency cache and offline mode. The gate creates driver-only, Spring-only
+and Boot-starter consumers without the IoTDB parent. Only the Boot consumer imports the official
+Boot BOM; no consumer adds a direct LZ4 dependency or custom version management to hide a published
+POM defect. The effective runtime graph and ordered classpath must agree. Every resolved LZ4,
+Spring Framework, Spring Data and Boot component must match the baseline declared by the client
+POMs; old `org.lz4:lz4-java`, missing components and version drift fail the gate. This catches
+reactor-only property overrides that disappear for downstream users. CI runs the gate after
+installing the modules and before live acceptance. Passing dependency resolution is separate from
+executing the bundle consumer or checking vulnerabilities. Its public JSON records coordinates
+and JAR SHA-512 values; retain the local Maven logs/classpath files privately rather than uploading
+them as public evidence.
+
 ```powershell
 python scripts/package_release.py `
   --expected-commit 0123456789abcdef0123456789abcdef01234567 `
   --driver-jar ..\r2dbc\target\iotdb-r2dbc-2.0.11-SNAPSHOT.jar `
-  --driver-pom ..\r2dbc\target\iotdb-r2dbc-2.0.11-SNAPSHOT.pom `
+  --driver-pom ..\r2dbc\pom.xml `
   --spring-jar target\iotdb-r2dbc-spring-data-2.0.11-SNAPSHOT.jar `
-  --spring-pom target\iotdb-r2dbc-spring-data-2.0.11-SNAPSHOT.pom `
+  --spring-pom pom.xml `
   --classpath acceptance-runtime-classpath.txt `
   --acceptance acceptance.json `
   --sbom runtime.cdx.json `

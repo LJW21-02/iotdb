@@ -258,7 +258,7 @@ The same test asserts the base-driver limitation: without the explicit bean or o
 artifact, Boot's default `DatabaseClient` auto configuration fails with
 `NoBindMarkersFactoryException`. The optional module's separate live repository test verifies
 automatic wiring, derived reads, pagination, repeated named binding and explicit writes. Verified
-versions: Boot 3.3.8, Spring 6.1.13, R2DBC SPI 1.0.0.RELEASE, r2dbc-pool 1.0.2.RELEASE,
+versions: Boot 3.5.16, Spring 6.2.19, R2DBC SPI 1.0.0.RELEASE, r2dbc-pool 1.0.2.RELEASE,
 Reactor 3.7.19.
 
 Values bound by frameworks arrive as `io.r2dbc.spi.Parameter`; the driver unwraps them, and a typed

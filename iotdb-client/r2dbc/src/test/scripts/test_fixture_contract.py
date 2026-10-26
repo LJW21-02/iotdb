@@ -18,7 +18,10 @@ import unittest
 import xml.etree.ElementTree as ET
 import os
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
+import fixture
 from fixture import EXPECTED_CASES, sanitize_report, stop_windows_node, verify_live
 from run_unit import unit_contract, verify_units
 from verify_tck import COUNT_DIFFERENCES, SUPPORTED, TRANSACTION_DIFFERENCES, verify
@@ -155,6 +158,50 @@ class UnitGateTest(unittest.TestCase):
             root.remove(root[1])
             with self.assertRaises(ValueError):
                 verify_current()
+
+
+class FixtureLaunchTest(unittest.TestCase):
+    def test_cluster_configures_synchronous_wal_on_every_data_node(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            distribution = root / "distribution"
+            (distribution / "lib").mkdir(parents=True)
+            (distribution / "lib" / "fixture.jar").touch()
+            arguments = SimpleNamespace(distribution=distribution, run_root=root / "runs", mode="cluster")
+            with mock.patch.object(fixture, "java_tool", side_effect=lambda name: name), mock.patch.object(fixture, "private_directory", side_effect=lambda path: path.mkdir(mode=0o700)), mock.patch.object(fixture.subprocess, "run"), mock.patch.object(fixture, "start_node") as start_node:
+                state = fixture.start(arguments)
+            self.assertEqual({"cn", "dn1", "dn2", "dn3"}, set(state["nodes"]))
+            self.assertEqual(4, start_node.call_count)
+            for name in ("dn1", "dn2", "dn3"):
+                configuration = Path(state["nodes"][name]["conf"]) / "iotdb-system.properties"
+                properties = dict(line.split("=", 1) for line in configuration.read_text(encoding="utf-8").splitlines())
+                self.assertEqual("SYNC", properties["wal_mode"], name)
+
+    def test_soak_proxy_uses_the_running_python_interpreter_as_one_argument(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reports = root / "iotdb-client/r2dbc/target/surefire-reports"
+            reports.mkdir(parents=True)
+            run = root / "fixture"
+            (run / "artifacts").mkdir(parents=True)
+            interpreter = str(root / "python with spaces" / "python3")
+            commands = []
+
+            def run_maven(command, output, timeout):
+                commands.append(command)
+                report = ET.Element("testsuite")
+                for class_name, method in sorted(EXPECTED_CASES["soak"]):
+                    ET.SubElement(report, "testcase", classname="org.apache.iotdb.r2dbc." + class_name, name=method)
+                ET.ElementTree(report).write(reports / "TEST-org.apache.iotdb.r2dbc.IoTDBR2dbcSoakIT.xml")
+                return 0
+
+            arguments = SimpleNamespace(suite="soak", offline=False, timeout=30)
+            state = {"rpcPort": 16667, "mode": "plain", "protocol": "binary", "precision": "ms", "runDirectory": str(run)}
+            with mock.patch.object(fixture, "REPOSITORY", root), mock.patch.object(fixture, "read_credentials", return_value={"username": "test-user", "password": "test-password"}), mock.patch.object(fixture, "run_maven", side_effect=run_maven), mock.patch("fixture.sys.executable", interpreter):
+                fixture.run_tests(arguments, state)
+            self.assertEqual(1, len(commands))
+            self.assertIn("-Diotdb.it.python=" + interpreter, commands[0])
+            self.assertIn("-Diotdb.it.stallProxy=" + str(fixture.SCRIPTS / "stall_proxy.py"), commands[0])
 
 
 if __name__ == "__main__":

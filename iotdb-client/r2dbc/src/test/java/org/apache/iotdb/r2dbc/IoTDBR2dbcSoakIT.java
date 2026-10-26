@@ -435,7 +435,7 @@ public class IoTDBR2dbcSoakIT {
         "set -Diotdb.it.stallProxy=<path to stall_proxy.py> to run it",
         System.getProperty("iotdb.it.stallProxy") != null);
     return new ProcessBuilder(
-            "python",
+            System.getProperty("iotdb.it.python", "python"),
             Path.of(System.getProperty("iotdb.it.stallProxy")).toString(),
             "--listen-port",
             String.valueOf(proxyPort),
@@ -482,7 +482,7 @@ public class IoTDBR2dbcSoakIT {
 
   /**
    * Sustained mixed workload, gated by {@code -Diotdb.it.soak.seconds=N}: paged queries, prepared
-   * statements, discarded results and connection churn for as long as the budget allows. Every
+   * statements and discarded results on one connection for as long as the budget allows. Every
    * iteration asserts what it read, and the run reports rows, statements, heap and thread deltas
    * with a {@code SOAK} prefix so a long run leaves evidence behind.
    *

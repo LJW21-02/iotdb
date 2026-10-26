@@ -18,9 +18,9 @@
 -->
 # Spring Data R2DBC for IoTDB Table SQL
 
-`iotdb-r2dbc-spring-data` adds Spring Data 3.3.8 integration to the non-blocking driver. It is a
+`iotdb-r2dbc-spring-data` adds Spring Data 3.5.13 integration to the non-blocking driver. It is a
 separate artifact: the base `iotdb-r2dbc` driver has no Spring runtime dependency. The integration
-uses Spring Framework 6.1.13 and its live test uses Spring Boot 3.3.8's
+uses Spring Framework 6.2.19 and its live test uses Spring Boot 3.5.16's
 `spring-boot-starter-data-r2dbc`.
 
 ## Application dependencies and automatic wiring

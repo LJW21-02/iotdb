@@ -394,6 +394,9 @@ def start(arguments):
             "config_node_consensus_protocol_class": "org.apache.iotdb.consensus.simple.SimpleConsensus",
             "schema_region_consensus_protocol_class": "org.apache.iotdb.consensus.simple.SimpleConsensus",
             "data_region_consensus_protocol_class": "org.apache.iotdb.consensus.simple.SimpleConsensus",
+            # Node-loss forcibly kills a JVM after an acknowledged write. Require
+            # synchronous WAL persistence before asserting crash recovery of that row.
+            "wal_mode": "SYNC",
             "cn_rpc_thrift_compression_enable": "false", "dn_rpc_thrift_compression_enable": str(state["protocol"] == "compact").lower(), "dn_rpc_advanced_compression_enable": "false",
             "timestamp_precision": state["precision"], "enable_thrift_ssl": str(tls).lower(), "thrift_ssl_client_auth": str(client_auth).lower(),
             "enable_rest_service": "false", "enable_mqtt_service": "false", "cn_metric_reporter_list": "", "dn_metric_reporter_list": "", "dn_metric_internal_reporter_type": "MEMORY", "max_tsblock_line_number": 128,
@@ -503,7 +506,7 @@ def run_tests(arguments, state):
         if state["mode"] != "plain" or state["protocol"] != "binary" or state["precision"] != "ms":
             raise ValueError("The full soak suite currently requires plain binary/ms")
         tests = "IoTDBR2dbcSoakIT#" + "+".join(sorted(method for _, method in EXPECTED_CASES["soak"]))
-        base += [f"-Diotdb.it.stallProxy={SCRIPTS / 'stall_proxy.py'}"]
+        base += [f"-Diotdb.it.stallProxy={SCRIPTS / 'stall_proxy.py'}", f"-Diotdb.it.python={sys.executable}"]
     elif suite == "long-soak":
         if state["mode"] != "plain" or state["protocol"] != "binary" or state["precision"] != "ms" or getattr(arguments, "soak_seconds", 0) <= 0:
             raise ValueError("Sustained soak requires plain binary/ms and --soak-seconds > 0")
