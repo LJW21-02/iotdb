@@ -89,7 +89,7 @@ public class IoTDBR2dbcMultiResultTest {
     String first = "SELECT ';?' FROM probe -- ; ?";
     String second = "/* ; ? */ SELECT \"v;?\" FROM probe";
     assertPagedResults(
-        connection -> connection.createBatch().add(first + "\n; " + second).execute(),
+        connection -> connection.createBatch().add(first + "\n; " + second + "; -- tail").execute(),
         false,
         "table",
         List.of(first, second));
@@ -110,7 +110,9 @@ public class IoTDBR2dbcMultiResultTest {
   public void compoundStatementWaitsForEachQueryAndItsCleanup() throws Exception {
     assertPagedResults(
         connection ->
-            connection.createStatement("SELECT v FROM probe; SELECT v FROM probe").execute(),
+            connection
+                .createStatement("SELECT v FROM probe; SELECT v FROM probe; /* tail */")
+                .execute(),
         false);
   }
 

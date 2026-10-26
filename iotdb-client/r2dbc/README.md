@@ -45,15 +45,26 @@ ConnectionFactoryOptions options =
         .option(IoTDBConnectionFactoryOptions.SQL_DIALECT, "table")
         .build();
 
-ConnectionFactory factory = ConnectionFactories.get(options);
-Mono.from(factory.create())
-    .flatMapMany(
-        connection ->
-            Flux.from(connection.createStatement("SELECT v FROM demo.samples WHERE v > ?").bind(1, 100).execute())
-                .flatMap(result -> result.map((row, metadata) -> row.get("v", Integer.class)))
-                .doFinally(signal -> Mono.from(connection.close()).subscribe()))
-    .subscribe(System.out::println);
+try (IoTDBR2dbcConnectionFactory factory =
+    (IoTDBR2dbcConnectionFactory) ConnectionFactories.get(options)) {
+  Flux.usingWhen(
+          Mono.from(factory.create()),
+          connection ->
+              Flux.from(
+                      connection
+                          .createStatement("SELECT v FROM demo.samples WHERE v > ?")
+                          .bind(0, 100)
+                          .execute())
+                  .flatMap(result -> result.map((row, metadata) -> row.get("v", Integer.class))),
+          connection -> Mono.from(connection.close()))
+      .doOnNext(System.out::println)
+      .blockLast(); // Wait only at this standalone application's boundary.
+}
 ```
+
+Close all connections before closing their `IoTDBR2dbcConnectionFactory`, which owns the shared
+selector and callback runtime. A long-lived reactive application should own that factory for its
+lifetime and close it at shutdown after connection cleanup completes.
 
 The connection URL form is also supported: `r2dbc:iotdb://user:password@host:6667/database`
 (credentials belong to the user info part; the SPI rejects `?user=...&password=...` in the query string,
@@ -127,12 +138,12 @@ and `deallocatePreparedStatement` (PR #17027, commit `8896075ab1`, 2026-02-06, f
 | Literal parameters | All statements and dialects for the types above; placeholders inside strings and quoted identifiers are never rewritten. In Table SQL, placeholders inside `--` and `/* ... */` comments are also ignored; Tree SQL follows its server grammar, where those forms are not comments. |
 | `DATE` parameters | Not supported: this server version rejects both `DATE < STRING` and `DATE < INT32` comparisons, so binding a `LocalDate` fails at bind time instead of being sent. Rows of a `DATE` column are decoded with the TsFile date encoding. |
 | BLOB results | Default and explicit `ByteBuffer` reads return independent, read-only byte snapshots; `byte[]` reads return copies. Binary parameters remain unsupported. |
-| OBJECT results | Exposed as `VARCHAR`/`String`, using the same object size description as the reference RPC client; native metadata remains `OBJECT`. This describes the server's object reference, and does not download its content. |
+| OBJECT results | The decoder exposes object references as `VARCHAR`/`String`, using the reference RPC client's object size description; native metadata remains `OBJECT`. The community server rejects stored OBJECT columns. Live tests cover that rejection and null OBJECT expressions; non-null reference decoding has synthetic coverage only. Object contents are not downloaded. |
 | Connection pool | Verified with `r2dbc-pool` 1.0.2: borrow, `LOCAL` validation, release, lifecycle reset and reuse of the same connection. |
 | Prepared statements | One server side handle per execution; a statement that fails after prepare is deallocated, so the next execution cannot collide with a leaked handle. |
 | Parameters | Zero-based positional indexes as required by the SPI; `io.r2dbc.spi.Parameter` wrappers (used by frameworks) are unwrapped and typed nulls become `bindNull`. |
 | Output parameters | Not supported. `Parameters.out(...)` is rejected at bind time; `Parameters.inOut(...)` is accepted as an input parameter because the SPI type also implements `Parameter.In`, and its output half is ignored, so a caller that expects a returned value gets none. |
-| Batch | Parameter free statements run in order and stop at the first failure; effects of already executed statements are kept. Each `add(sql)` may contain multiple SQL statements, split with the session's Tree/Table quoting and comment rules, with one Result per statement. |
+| Batch | Parameter free statements run in order and stop at the first failure; effects of already executed statements are kept. Each `add(sql)` may contain multiple SQL statements, split with the session's Tree/Table quoting and comment rules, with one Result per executable statement. Table comment-only fragments, including a trailing comment after a semicolon, are ignored. Tree SQL retains its server grammar, where those comment forms are not comments. |
 | Validation | `LOCAL` checks the local session state, `REMOTE` issues a light weight `getProperties` RPC. |
 | Stability | Verified against a live instance: 150 prepared executions in a row without leaking a server side handle, 300 rows paged with `fetchSize=7` without loss or duplication, demand driven consumption, 8 parallel connections sharing one selector runtime and 20 connect/close cycles that release their selector thread. |
 | Backpressure | Pages are fetched only when the current page is exhausted and more rows are demanded. |
@@ -146,6 +157,37 @@ and `deallocatePreparedStatement` (PR #17027, commit `8896075ab1`, 2026-02-06, f
 | Server side cancellation | Not implemented by the server; the driver stops consuming and releases the handle. |
 
 ## Build and test
+
+For an isolated server and a strict acceptance gate, use the repository-owned
+[fixture scripts](src/test/scripts/README.md). Build the matching all-bin distribution and
+dependencies, then run from the repository root (`mvnw.cmd` on Windows):
+
+```bash
+./mvnw -B -pl distribution,iotdb-client/jdbc,iotdb-client/r2dbc-spring-data -am -DskipTests install
+python iotdb-client/r2dbc/src/test/scripts/run_acceptance.py \
+    --distribution distribution/target/apache-iotdb-2.0.11-SNAPSHOT-all-bin/apache-iotdb-2.0.11-SNAPSHOT-all-bin \
+    --run-root target/r2dbc-acceptance --mode plain
+```
+
+Repeat with `--mode tls` and `--mode cluster` for TLS and 1C3D validation. The standard-library
+Python runner works on Windows and Linux, creates isolated data and random loopback ports, and
+always stops its fixture. It runs the official TCK with an explicit 28-method contract: 17 must pass,
+11 must fail with the documented capability diagnostics, and errors, skips, missing or duplicated
+methods fail the gate. This does not mean the full TCK passes; see [TCK.md](TCK.md).
+
+[The CI workflow](../../.github/workflows/r2dbc-acceptance.yml) runs script negative controls and
+the three fixture modes, and uploads scrubbed evidence only. The workflow has been delivered;
+hosted CI execution is not claimed here.
+
+Local live verification on 2026-10-26 includes both `IoTDBR2dbcObjectIT` cases: stored OBJECT DDL
+fails with `701` (`SEMANTIC_ERROR`) while the connection stays valid, and a paged
+`CAST(NULL AS OBJECT)` expression retains its OBJECT metadata alongside readable stored values.
+This server cannot persist non-null OBJECT columns, so no live upload/download result is claimed.
+The actual DataNode stop/restart case also passed (1/1): its old connection becomes invalid and
+another DataNode remains RPC-accessible. The fixture has replication factor one; this does not
+establish continuous access to a region stored only on the stopped node.
+
+The following commands are useful for individual suites against an existing instance:
 
 ```bash
 # Unit tests (no server required)
@@ -166,11 +208,18 @@ mvn test -pl iotdb-client/r2dbc -Dtest=IoTDBR2dbcTlsIT -DfailIfNoTests=false    
 mvn spotless:apply -pl iotdb-client/r2dbc
 ```
 
+Both client artifacts were built and installed with dependency analysis, RAT and Spotless enabled.
+The driver JAR contains its SPI provider registration; the Spring Data JAR contains both resolver
+registrations, and both include LICENSE and NOTICE. The complete default reactor's CycloneDX
+aggregate and repository dependency comparison were also checked: `dependencies.json` records the
+12 Spring dependencies introduced by the optional integration artifact.
+
 ## Spring `DatabaseClient`
 
-Spring cannot derive bind markers from a driver that publishes no Spring types, so the default
-builder fails with `NoBindMarkersFactoryException`. Build the client with named parameters disabled
-(or with an explicit `BindMarkersFactory`):
+When using the base `iotdb-r2dbc` artifact alone, Spring cannot derive bind markers because that
+artifact publishes no Spring types, so the default builder fails with
+`NoBindMarkersFactoryException`. Build the client with named parameters disabled (or with an
+explicit `BindMarkersFactory`):
 
 ```java
 DatabaseClient client =
@@ -184,6 +233,13 @@ Flux<Integer> values =
         .all();
 ```
 
+The optional [Spring Data integration](../r2dbc-spring-data/README.md), artifact
+`iotdb-r2dbc-spring-data`, registers bind-marker and dialect resolvers. With it, Boot can create
+its default `DatabaseClient`, `R2dbcEntityTemplate` and query repositories, including named binding
+and Table pagination. Its supported write contract is explicit `@Query`/`@Modifying` methods
+returning `Mono<Void>`; it does not emulate transactions, affected row counts, generated keys or
+standard CRUD `save`. Use Table SQL connections and follow the integration's entity/key guidance.
+
 ### Spring Boot sample
 
 `IoTDBR2dbcSpringBootSampleIT` (profile `with-r2dbc-spring`) starts a real Boot application context
@@ -194,10 +250,12 @@ that discovers the driver through the ServiceLoader, lets Boot build the `Connec
 mvn test -pl iotdb-client/r2dbc -P with-r2dbc-spring -Dtest=IoTDBR2dbcSpringBootSampleIT     -DfailIfNoTests=false -Diotdb.it.host=127.0.0.1 -Diotdb.it.port=6667     -Diotdb.it.user=<user> -Diotdb.it.password=<password>
 ```
 
-The same test asserts the documented limitation: without the explicit bean, Boot's default
-`DatabaseClient` auto configuration fails with `NoBindMarkersFactoryException`, because the driver
-publishes no Spring types. Verified versions: Boot 3.3.8, Spring 6.1.13, R2DBC SPI 1.0.0.RELEASE,
-r2dbc-pool 1.0.2.RELEASE, Reactor 3.7.19.
+The same test asserts the base-driver limitation: without the explicit bean or optional integration
+artifact, Boot's default `DatabaseClient` auto configuration fails with
+`NoBindMarkersFactoryException`. The optional module's separate live repository test verifies
+automatic wiring, derived reads, pagination, repeated named binding and explicit writes. Verified
+versions: Boot 3.3.8, Spring 6.1.13, R2DBC SPI 1.0.0.RELEASE, r2dbc-pool 1.0.2.RELEASE,
+Reactor 3.7.19.
 
 Values bound by frameworks arrive as `io.r2dbc.spi.Parameter`; the driver unwraps them, and a typed
 null becomes a `bindNull` for the declared type.
@@ -234,19 +292,10 @@ promise.
 
 ## Follow-up work
 
-Open items, tracked by the milestones of the design document above:
+Future optimization and broader release work, tracked by the design document above:
 
 - A longer stability run than the recorded ten minutes (`PERFORMANCE.md`, "Long run"), ideally on a
   machine that is not shared with other work.
-- A cluster run in which one DataNode is taken down on purpose. The driver side of that case is
-  covered (a dead or silent server has to fail within its budget and the connection is not reused,
-  `IoTDBR2dbcSoakIT`), but taking a single node out of a running cluster needs a helper that can
-  restart it, which the validation scripts do not have yet.
 - A write coalescing layer for the non-blocking transport. Thrift's async client writes the frame
   size and payload as two socket writes, which costs one extra transport delay per request on a high
   latency path (`PERFORMANCE.md`, "RTT arm"); on a LAN it is not visible.
-- Repository level packaging checks. Verified here: the module builds to
-  `iotdb-r2dbc-<version>.jar` with `META-INF/services/io.r2dbc.spi.ConnectionFactoryProvider`
-  pointing at `IoTDBR2dbcConnectionFactoryProvider`, its dependencies are listed in
-  `dependencies.json`, and it builds with the RAT and spotless checks enabled. The aggregate
-  CycloneDX report (`-P enable-sbom-check`) is a whole reactor run and was not part of this work.

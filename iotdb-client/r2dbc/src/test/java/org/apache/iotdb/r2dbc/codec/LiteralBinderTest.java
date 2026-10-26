@@ -132,6 +132,32 @@ public class LiteralBinderTest {
   }
 
   @Test
+  public void dropsOnlyCommentAndWhitespaceFragmentsInTableSql() {
+    assertEquals(
+        List.of("SELECT 1"),
+        LiteralBinder.splitStatements("SELECT 1; -- tail ; ?", SqlDialect.TABLE));
+    assertEquals(
+        List.of("SELECT 1"),
+        LiteralBinder.splitStatements("SELECT 1; /* tail ; ? */", SqlDialect.TABLE));
+    assertEquals(
+        List.of("-- lead\nSELECT 1", "/* before */ SELECT 2 -- after"),
+        LiteralBinder.splitStatements(
+            "/* empty */; -- lead\nSELECT 1; /* before */ SELECT 2 -- after\n; /* tail */",
+            SqlDialect.TABLE));
+    assertEquals(
+        List.of(),
+        LiteralBinder.splitStatements(" -- only\r\n /* comment */ ; ", SqlDialect.TABLE));
+    // An unterminated block comment remains SQL for the server to reject.
+    assertEquals(List.of("/* unfinished"), LiteralBinder.splitStatements("/* unfinished"));
+    assertEquals(
+        List.of("-- operators", "/* operators */"),
+        LiteralBinder.splitStatements("-- operators; /* operators */", SqlDialect.TREE));
+    assertEquals(List.of("''", "\"\"", "``"), LiteralBinder.splitStatements("''; \"\"; ``"));
+    assertEquals(List.of("\u2003"), LiteralBinder.splitStatements("\u2003", SqlDialect.TABLE));
+    assertEquals(List.of(), LiteralBinder.splitStatements(Character.toString((char) 0)));
+  }
+
+  @Test
   public void rejectsPlaceholderAndParameterCountMismatch() {
     assertThrows(
         IoTDBR2dbcException.class,

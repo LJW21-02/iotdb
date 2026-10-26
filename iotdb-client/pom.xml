@@ -35,6 +35,7 @@
         <module>isession</module>
         <module>jdbc</module>
         <module>r2dbc</module>
+        <module>r2dbc-spring-data</module>
         <module>service-rpc</module>
         <module>session</module>
         <module>subscription</module>

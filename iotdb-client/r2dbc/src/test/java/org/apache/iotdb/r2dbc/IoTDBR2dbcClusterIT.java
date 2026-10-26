@@ -25,6 +25,7 @@ import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.ConnectionFactoryOptions;
 import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Row;
+import io.r2dbc.spi.ValidationDepth;
 import org.junit.Assume;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -38,6 +39,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
@@ -45,9 +47,9 @@ import static org.junit.Assert.assertTrue;
 
 /**
  * Runs against a 1C3D cluster (one ConfigNode, three DataNodes) started by {@code
- * .r2dbc-validation/Start-Cluster.ps1}. It checks that data written through one DataNode is
- * readable from the others and that a broken connection surfaces as a transport error instead of
- * being silently reused or replayed.
+ * src/test/scripts/fixture.py}. It checks that data written through one DataNode is readable from
+ * the others and that a broken connection surfaces as a transport error instead of being silently
+ * reused or replayed.
  *
  * <p>Skipped unless {@code -Diotdb.it.cluster.ports=16667,16668,16669} is given.
  */
@@ -228,7 +230,7 @@ public class IoTDBR2dbcClusterIT {
     Path proxyScript = Path.of(System.getProperty("iotdb.it.cluster.proxy"));
     Process proxy =
         new ProcessBuilder(
-                "python",
+                System.getProperty("iotdb.it.cluster.python", "python"),
                 proxyScript.toString(),
                 "--listen-port",
                 String.valueOf(proxyPort),
@@ -287,6 +289,88 @@ public class IoTDBR2dbcClusterIT {
       ((IoTDBR2dbcConnectionFactory) factory).close();
       proxy.destroyForcibly();
     }
+  }
+
+  /**
+   * Stops a real fixture DataNode, checks the old connection, then restarts it. The fixture uses
+   * replication factor one, so this checks connection invalidation and surviving RPC availability,
+   * not continuous access to a region hosted only on the stopped node.
+   */
+  @Test
+  public void stoppedDataNodeInvalidatesItsConnectionWhileAnotherNodeStaysHealthy()
+      throws Exception {
+    Assume.assumeTrue(System.getProperty("iotdb.it.cluster.fixture") != null);
+    Assume.assumeTrue(System.getProperty("iotdb.it.cluster.control") != null);
+    List<Integer> ports = clusterPorts();
+    assertEquals(3, ports.size());
+    IoTDBR2dbcConnectionFactory victimFactory = (IoTDBR2dbcConnectionFactory) factory(ports.get(2));
+    IoTDBR2dbcConnectionFactory survivorFactory =
+        (IoTDBR2dbcConnectionFactory) factory(ports.get(0));
+    Connection victim = null;
+    Connection survivor = null;
+    boolean stopAttempted = false;
+    try {
+      victim = Mono.from(victimFactory.create()).block(Duration.ofSeconds(15));
+      survivor = Mono.from(survivorFactory.create()).block(Duration.ofSeconds(15));
+      assertTrue(serverVersion(victim) > 0);
+      assertTrue(serverVersion(survivor) > 0);
+      stopAttempted = true;
+      controlFixtureNode("kill-node");
+
+      Connection stoppedConnection = victim;
+      assertThrows(RuntimeException.class, () -> serverVersion(stoppedConnection));
+      assertTrue(!Mono.from(victim.validate(ValidationDepth.LOCAL)).block());
+      // A second request must fail too, rather than reconnecting or replaying it elsewhere.
+      assertThrows(RuntimeException.class, () -> serverVersion(stoppedConnection));
+      assertTrue(serverVersion(survivor) > 0);
+      assertTrue(Mono.from(survivor.validate(ValidationDepth.REMOTE)).block());
+    } finally {
+      try {
+        Mono.whenDelayError(
+                victim == null ? Mono.empty() : Mono.from(victim.close()),
+                survivor == null ? Mono.empty() : Mono.from(survivor.close()))
+            .block(Duration.ofSeconds(15));
+      } finally {
+        try {
+          victimFactory.close();
+        } finally {
+          try {
+            survivorFactory.close();
+          } finally {
+            if (stopAttempted) {
+              controlFixtureNode("restart-node");
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private static int serverVersion(Connection connection) {
+    return Flux.from(connection.createStatement("SHOW VERSION").execute())
+        .concatMap(result -> result.map((row, metadata) -> row.get(0, String.class)))
+        .collectList()
+        .block(Duration.ofSeconds(15))
+        .size();
+  }
+
+  private static void controlFixtureNode(String action) throws Exception {
+    Process controller =
+        new ProcessBuilder(
+                System.getProperty("iotdb.it.cluster.python", "python"),
+                System.getProperty("iotdb.it.cluster.control"),
+                action,
+                "--state",
+                System.getProperty("iotdb.it.cluster.fixture"),
+                "--node",
+                "dn3")
+            .redirectErrorStream(true)
+            .start();
+    if (!controller.waitFor(120, TimeUnit.SECONDS)) {
+      controller.destroyForcibly();
+      throw new AssertionError("Fixture node controller exceeded its deadline");
+    }
+    assertEquals("Fixture node controller failed", 0, controller.exitValue());
   }
 
   private static ConnectionFactory factory(int port) {

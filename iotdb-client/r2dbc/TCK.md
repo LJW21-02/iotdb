@@ -36,6 +36,36 @@ The `with-r2dbc-tck` profile adds the Jupiter engine, the vintage engine (so the
 keep running) and the IoTDB JDBC driver that the TCK uses as its fixture. Without `-Diotdb.it.host`
 the whole class is skipped, so a plain `mvn test` never depends on a server.
 
+For a reproducible isolated server, follow the [fixture instructions](src/test/scripts/README.md).
+After building the matching distribution and installing reactor dependencies, run from the repository
+root:
+
+```bash
+python iotdb-client/r2dbc/src/test/scripts/run_acceptance.py \
+    --distribution distribution/target/apache-iotdb-2.0.11-SNAPSHOT-all-bin/apache-iotdb-2.0.11-SNAPSHOT-all-bin \
+    --run-root target/r2dbc-acceptance --mode plain
+```
+
+This entry point runs the official TCK as part of plain acceptance and checks its new Surefire XML
+with `verify_tck.py`. Every one of the 28 inherited methods must occur exactly once: the 17 supported
+methods must pass, and the 11 capability differences must fail with their documented diagnostic.
+Errors, skips, missing methods, duplicate methods, unexpected failures or a changed exclusion list
+fail the gate. It also checks the six excluded override methods in the adapter source. The runner
+does not use `maven.test.failure.ignore`: Maven must report the expected TCK failure, and the gate
+accepts only the reviewed capability contract. A successful acceptance gate is not a full TCK pass.
+
+For an individually executed TCK suite, check the report directly:
+
+```bash
+python iotdb-client/r2dbc/src/test/scripts/verify_tck.py \
+    iotdb-client/r2dbc/target/surefire-reports/TEST-org.apache.iotdb.r2dbc.IoTDBR2dbcTckTest.xml
+```
+
+[The acceptance workflow](../../.github/workflows/r2dbc-acceptance.yml) runs the same plain gate
+alongside TLS and cluster jobs. Its definition is delivered; no successful hosted CI run is claimed
+by this document. Only scrubbed fixture artifacts should be uploaded, because raw Surefire XML can
+contain connection credentials in system properties.
+
 ## Fixture
 
 `IoTDBR2dbcTckTest` implements `TestKit<Integer>`, uses `?` placeholders with zero-based indexes and
@@ -56,10 +86,13 @@ The adapter prepares its fixture through the IoTDB JDBC driver, which only the `
 profile puts on the test classpath. Without that profile it skips itself with a message instead of
 failing, so a plain `mvn test -Diotdb.it.host=...` run of the integration suites stays green.
 
-## Result of the last run (2026-09-23)
+## Result of the last run (2026-10-26)
 
-28 inherited test methods ran: **17 passed, 11 failed, 0 errored**. Six further tests are excluded
-through `@Disabled` overrides, which is the mechanism the TCK documents for unsupported features.
+28 inherited test methods ran against an isolated binary/ms 1C1D built from this branch:
+**17 passed, 11 failed, 0 errored, 0 skipped**. The 11 failures match the capability differences below;
+the Maven command correctly returns a failure status. Six further methods are excluded through
+`@Disabled` overrides. These overrides have no test annotation and are not included in the 28-method
+Surefire count, so they must not be reported as six passing tests or as six Surefire skips.
 
 ### Passed (17)
 
@@ -86,8 +119,8 @@ through `@Disabled` overrides, which is the mechanism the TCK documents for unsu
 
 ## Conclusion
 
-Apart from the documented transaction and update-count differences, the TCK passes, including
-statement validity checks, dead parameter binding, metadata access, result segments, filtering,
-validation and compound statements. The failures above are capability differences of the database,
-not silent driver defects, and they stay visible here rather than being disabled to produce a green
-run.
+The 17 supported TCK methods pass, including statement validity checks, dead parameter binding,
+metadata access, result segments, filtering, validation and compound statements. The full official
+TCK does not pass: its 11 failures remain visible and are checked against the explicit transaction
+and update-count capability contract. The database capabilities are reported truthfully rather than
+emulated or disabled to produce a green Maven run.

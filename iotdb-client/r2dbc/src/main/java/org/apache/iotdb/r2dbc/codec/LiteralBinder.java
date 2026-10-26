@@ -91,7 +91,7 @@ public final class LiteralBinder {
    * Splits a SQL string on top level semicolons.
    *
    * <p>Strings, quoted identifiers and comments are copied verbatim, so a semicolon inside them
-   * does not start a new statement. Empty statements are dropped.
+   * does not start a new statement. Empty statements and Table comment-only fragments are dropped.
    */
   public static List<String> splitStatements(String sql) {
     return splitStatements(sql, SqlDialect.TABLE);
@@ -101,15 +101,18 @@ public final class LiteralBinder {
   public static List<String> splitStatements(String sql, SqlDialect dialect) {
     List<String> statements = new ArrayList<>();
     StringBuilder current = new StringBuilder();
+    boolean hasContent = false;
     int index = 0;
     while (index < sql.length()) {
       char character = sql.charAt(index);
       switch (character) {
         case '\'':
+          hasContent = true;
           index = copyQuoted(sql, index, current, '\'');
           break;
         case '"':
         case '`':
+          hasContent = true;
           index = copyQuoted(sql, index, current, character);
           break;
         case '-':
@@ -118,6 +121,7 @@ public final class LiteralBinder {
               && sql.charAt(index + 1) == '-') {
             index = copyLineComment(sql, index, current);
           } else {
+            hasContent = true;
             current.append(character);
             index++;
           }
@@ -126,28 +130,32 @@ public final class LiteralBinder {
           if (dialect == SqlDialect.TABLE && startsBlockComment(sql, index)) {
             index = copyBlockComment(sql, index, current);
           } else {
+            hasContent = true;
             current.append(character);
             index++;
           }
           break;
         case ';':
-          addStatement(statements, current);
+          addStatement(statements, current, hasContent);
           current.setLength(0);
+          hasContent = false;
           index++;
           break;
         default:
+          // Match trim() below: non-ASCII whitespace remains SQL for the server to validate.
+          hasContent |= character > ' ';
           current.append(character);
           index++;
       }
     }
-    addStatement(statements, current);
+    addStatement(statements, current, hasContent);
     return statements;
   }
 
-  private static void addStatement(List<String> statements, StringBuilder statement) {
-    String text = statement.toString().trim();
-    if (!text.isEmpty()) {
-      statements.add(text);
+  private static void addStatement(
+      List<String> statements, StringBuilder statement, boolean hasContent) {
+    if (hasContent) {
+      statements.add(statement.toString().trim());
     }
   }
 

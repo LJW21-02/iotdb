@@ -292,7 +292,7 @@ public class IoTDBR2dbcIT {
                       + DATABASE
                       + ".batch_samples(time,device,v) VALUES (1,'b1',1); INSERT INTO "
                       + DATABASE
-                      + ".batch_samples(time,device,v) VALUES (2,'b1',2)");
+                      + ".batch_samples(time,device,v) VALUES (2,'b1',2); -- batch tail");
       assertEquals(2, Flux.from(batch.execute()).cast(Result.class).collectList().block().size());
 
       // Parameter placeholders are rejected for batches.
@@ -317,7 +317,7 @@ public class IoTDBR2dbcIT {
               connection.createStatement(
                   "SELECT time FROM "
                       + DATABASE
-                      + ".batch_samples WHERE device = 'b1' ORDER BY time"));
+                      + ".batch_samples WHERE device = 'b1' ORDER BY time; /* statement tail */"));
       assertEquals(3, rows.size());
     } finally {
       Mono.from(connection.close()).block();
